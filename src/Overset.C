@@ -239,6 +239,12 @@ Overset::define_overset_bounding_box()
     std::vector<double> minOversetCorner(nDim_);
     std::vector<double> maxOversetCorner(nDim_);
     
+    // initialize max and min
+    for (int j = 0; j < nDim_; ++j ) {
+      minOversetCorner[j] = +1.0e16;
+      maxOversetCorner[j] = -1.0e16;
+    }
+    
     // use locally owned elemetsjust for the sake of tutorial
     stk::mesh::Selector s_locally_owned_union_overset = metaData_->locally_owned_part()
       &stk::mesh::Selector(*volumePartVector_[1]);
@@ -368,6 +374,12 @@ Overset::cut_surface()
 {
   std::vector<double> minOversetCorner(nDim_);
   std::vector<double> maxOversetCorner(nDim_);
+
+  // initialize max and min
+  for (int j = 0; j < nDim_; ++j ) {
+    minOversetCorner[j] = +1.0e16;
+    maxOversetCorner[j] = -1.0e16;
+  }
   
   // use locally owned faces; first need to extract the part for surface_5
   stk::mesh::Part *targetPart = metaData_->get_part("surface_5");
