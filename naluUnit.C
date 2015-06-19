@@ -38,8 +38,7 @@ int main( int argc, char ** argv )
   
   // command line options.
   std::string inputFileName, logFileName;
-  int serializedIOGroupSize = 0;
-
+ 
   boost::program_options::options_description desc("Nalu Supported Options");
   desc.add_options()
     ("help,h","Help message")
@@ -77,7 +76,13 @@ int main( int argc, char ** argv )
  
   // create overset unit test
   sierra::naluUnit::Overset *overset = new sierra::naluUnit::Overset();
+  
+  // execute it
+  overset->execute();
 
+  // delete it
+  delete overset;
+  
   // all done  
   return 0;
 }
