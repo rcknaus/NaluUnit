@@ -71,6 +71,9 @@ public:
   // define the high level overset bounding box
   void define_overset_bounding_box();
 
+  // find the intersection of the surface bounding box on underlying mesh
+  void cut_surface();
+
   // define the underlying mesh set of bounding boxes
   void define_underlying_bounding_box();
 
@@ -91,6 +94,7 @@ public:
 
   // data
   const bool activateAura_;
+  const bool singleOversetBox_;
   const stk::search::SearchMethod searchMethod_;
   double currentTime_;
   size_t resultsFileIndex_;

@@ -41,6 +41,7 @@ namespace naluUnit{
 //--------------------------------------------------------------------------
 Overset::Overset()
   : activateAura_(false),
+    singleOversetBox_(false),
     searchMethod_(stk::search::BOOST_RTREE),
     currentTime_(0.0),
     resultsFileIndex_(1),
@@ -234,38 +235,168 @@ void
 Overset::define_overset_bounding_box()
 {
   // obtained via block_2 max/min coords
+  if ( singleOversetBox_ ) {
+    std::vector<double> minOversetCorner(nDim_);
+    std::vector<double> maxOversetCorner(nDim_);
+    
+    // use locally owned elemetsjust for the sake of tutorial
+    stk::mesh::Selector s_locally_owned_union_overset = metaData_->locally_owned_part()
+      &stk::mesh::Selector(*volumePartVector_[1]);
+    
+    stk::mesh::BucketVector const& locally_owned_elem_buckets =
+      bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_locally_owned_union_overset );
+    
+    for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_elem_buckets.begin();
+          ib != locally_owned_elem_buckets.end() ; ++ib ) {
+      stk::mesh::Bucket & b = **ib;
+      
+      const stk::mesh::Bucket::size_type length   = b.size();
+      for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+        
+        // get element
+        stk::mesh::Entity element = b[k];
+        
+        // extract elem_node_relations
+        stk::mesh::Entity const* elem_node_rels = bulkData_->begin_nodes(element);
+        const int num_nodes = bulkData_->num_nodes(element);
+        
+        for ( int ni = 0; ni < num_nodes; ++ni ) {
+          stk::mesh::Entity node = elem_node_rels[ni];
+          
+          // pointers to real data
+          const double * coords = stk::mesh::field_data(*coordinates_, node );
+          
+          // check max/min
+          for ( int j = 0; j < nDim_; ++j ) {
+            minOversetCorner[j] = std::min(minOversetCorner[j], coords[j]);
+            maxOversetCorner[j] = std::max(maxOversetCorner[j], coords[j]);
+          }
+        }
+      }
+    }
+    
+    // parallel reduce max/min
+    std::vector<double> g_minOversetCorner(nDim_);
+    std::vector<double> g_maxOversetCorner(nDim_);
+    
+    stk::ParallelMachine comm = NaluEnv::self().parallel_comm();
+    stk::all_reduce_min(comm, &minOversetCorner[0], &g_minOversetCorner[0], nDim_);
+    stk::all_reduce_max(comm, &maxOversetCorner[0], &g_maxOversetCorner[0], nDim_);
+    
+    // copy to the point
+    Point minOverset;
+    Point maxOverset;
+    
+    NaluEnv::self().naluOutputP0() << "Min/Max coords for overset bounding box" << std::endl;
+    for ( int i = 0; i < nDim_; ++i ) {
+      minOverset[i] = g_minOversetCorner[i];
+      maxOverset[i] = g_maxOversetCorner[i];
+      NaluEnv::self().naluOutputP0() << "componenet: " << i << " " << minOverset[i] << " " << maxOverset[i] << std::endl;
+    }
+    
+    // set up the processor infor for this bounding box; attach it to rank 0 with id 0
+    const size_t overSetBoundingBoxIdent = 0;
+    //const int parallelRankForBoundingBox = 0;
+    stk::search::IdentProc<uint64_t,int> theIdent(overSetBoundingBoxIdent, 0);
+    
+    // bounding box for all of the overset mesh
+    boundingElementBox oversetBox(Box(minOverset,maxOverset), theIdent);
+    boundingElementOversetBoxVec_.push_back(oversetBox);
+  }
+  else {
+
+    cut_surface();
+
+    // setup data structures for search
+    Point minOversetCorner, maxOversetCorner;
+    
+    stk::mesh::Selector s_locally_owned_union_over = metaData_->locally_owned_part()
+      &stk::mesh::Selector(*volumePartVector_[1]);
+    
+    stk::mesh::BucketVector const& locally_owned_elem_buckets_over =
+      bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_locally_owned_union_over );
+    
+    for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_elem_buckets_over.begin();
+          ib != locally_owned_elem_buckets_over.end() ; ++ib ) {
+      stk::mesh::Bucket & b = **ib;
+      
+      const stk::mesh::Bucket::size_type length   = b.size();
+      for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+        
+        // get element
+        stk::mesh::Entity element = b[k];
+        
+        // initialize max and min
+        for (int j = 0; j < nDim_; ++j ) {
+          minOversetCorner[j] = +1.0e16;
+          maxOversetCorner[j] = -1.0e16;
+        }
+        
+        // extract elem_node_relations
+        stk::mesh::Entity const* elem_node_rels = bulkData_->begin_nodes(element);
+        const int num_nodes = bulkData_->num_nodes(element);
+        
+        for ( int ni = 0; ni < num_nodes; ++ni ) {
+          stk::mesh::Entity node = elem_node_rels[ni];
+          
+          // pointers to real data
+          const double * coords = stk::mesh::field_data(*coordinates_, node );
+          
+          // check max/min
+          for ( int j = 0; j < nDim_; ++j ) {
+            minOversetCorner[j] = std::min(minOversetCorner[j], coords[j]);
+            maxOversetCorner[j] = std::max(maxOversetCorner[j], coords[j]);
+          }
+        }
+        
+        // setup ident
+        stk::search::IdentProc<uint64_t,int> theIdent(bulkData_->identifier(element), NaluEnv::self().parallel_rank());
+        
+        // create the bounding point box and push back
+        boundingElementBox theBox(Box(minOversetCorner,maxOversetCorner), theIdent);
+        boundingElementOversetBoxVec_.push_back(theBox);
+      }
+    }
+  }
+}
+
+//--------------------------------------------------------------------------
+//-------- cut_surface -----------------------------------------------------
+//--------------------------------------------------------------------------
+void
+Overset::cut_surface()
+{
   std::vector<double> minOversetCorner(nDim_);
   std::vector<double> maxOversetCorner(nDim_);
   
-  // initialize max and min for the entire overset mesh
-  for (int j = 0; j < nDim_; ++j ) {
-    minOversetCorner[j] = +1.0e16;
-    maxOversetCorner[j] = -1.0e16;
+  // use locally owned faces; first need to extract the part for surface_5
+  stk::mesh::Part *targetPart = metaData_->get_part("surface_5");
+  if ( NULL == targetPart ) {
+    NaluEnv::self().naluOutputP0() << "Sorry, no part name found by the name surface_5"  << std::endl;
   }
-  
-  // use locally owned elemetsjust for the sake of tutorial
+
   stk::mesh::Selector s_locally_owned_union_overset = metaData_->locally_owned_part()
-    &stk::mesh::Selector(*volumePartVector_[1]);
+    &stk::mesh::Selector(*targetPart);
   
-  stk::mesh::BucketVector const& locally_owned_elem_buckets =
-    bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_locally_owned_union_overset );
+  stk::mesh::BucketVector const& locally_owned_face_buckets =
+    bulkData_->get_buckets( metaData_->side_rank(), s_locally_owned_union_overset );
   
-  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_elem_buckets.begin();
-        ib != locally_owned_elem_buckets.end() ; ++ib ) {
+  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_face_buckets.begin();
+        ib != locally_owned_face_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib;
     
     const stk::mesh::Bucket::size_type length   = b.size();
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       
-      // get element
-      stk::mesh::Entity element = b[k];
+      // get face
+      stk::mesh::Entity face = b[k];
       
       // extract elem_node_relations
-      stk::mesh::Entity const* elem_node_rels = bulkData_->begin_nodes(element);
-      const int num_nodes = bulkData_->num_nodes(element);
+      stk::mesh::Entity const* face_node_rels = bulkData_->begin_nodes(face);
+      const int num_nodes = bulkData_->num_nodes(face);
       
       for ( int ni = 0; ni < num_nodes; ++ni ) {
-        stk::mesh::Entity node = elem_node_rels[ni];
+        stk::mesh::Entity node = face_node_rels[ni];
         
         // pointers to real data
         const double * coords = stk::mesh::field_data(*coordinates_, node );
@@ -291,7 +422,7 @@ Overset::define_overset_bounding_box()
   Point minOverset;
   Point maxOverset;
   
-  NaluEnv::self().naluOutputP0() << "Min/Max coords for overset bounding box" << std::endl;
+  NaluEnv::self().naluOutputP0() << "Min/Max coords for overset surface bounding box" << std::endl;
   for ( int i = 0; i < nDim_; ++i ) {
     minOverset[i] = g_minOversetCorner[i];
     maxOverset[i] = g_maxOversetCorner[i];
