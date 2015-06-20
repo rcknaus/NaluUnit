@@ -41,7 +41,8 @@ namespace naluUnit{
 //--------------------------------------------------------------------------
 Overset::Overset()
   : activateAura_(false),
-    singleOversetBox_(false),
+    singleOversetBox_(true),
+    reductionFactor_(0.10),
     searchMethod_(stk::search::BOOST_RTREE),
     currentTime_(0.0),
     resultsFileIndex_(1),
@@ -88,10 +89,13 @@ Overset::execute()
    ioBroker_->set_bulk_data(*bulkData_);
 
    // deal with input mesh
-   ioBroker_->add_mesh_database( "oversetMesh.g", stk::io::READ_MESH );
+   ioBroker_->add_mesh_database( "oversetMeshAligned.g", stk::io::READ_MESH );
    ioBroker_->create_input_mesh();
 
    register_fields();
+
+   // create the part that represents the intersected elements/nodes; 
+   declare_inactive_part();
 
    // populate bulk data
    ioBroker_->populate_bulk_data();
@@ -111,8 +115,8 @@ Overset::execute()
    // define overset bounding box
    define_overset_bounding_box();
 
-   // define underlying bounding box
-   define_underlying_bounding_box();
+   // define background bounding box
+   define_background_bounding_box();
 
    // perform the coarse search
    coarse_search();
@@ -128,6 +132,17 @@ Overset::execute()
 
    // output results
    output_results();
+}
+
+//--------------------------------------------------------------------------
+//-------- declare_inactive_part -------------------------------------------
+//--------------------------------------------------------------------------
+void
+Overset::declare_inactive_part()
+{
+  // not sure where this needs to be in order for the blcok to show up in the output file?
+  std::string partName = "block_3";
+  inActivePart_ =  &metaData_->declare_part(partName, stk::topology::ELEMENT_RANK);
 }
 
 //--------------------------------------------------------------------------
@@ -207,7 +222,7 @@ Overset::initialize_fields()
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       nodeBackgroundMesh[k] = 1.0;
       nodeOversetMesh[k] = 2.0;
-      nodeIntersectedMesh[k] = 3.0;
+      nodeIntersectedMesh[k] = 0.0;
     }
   }
   
@@ -223,7 +238,7 @@ Overset::initialize_fields()
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       elemBackgroundMesh[k] = 1.0;
       elemOversetMesh[k] = 2.0;
-      elemIntersectedMesh[k] = 3.0;
+      elemIntersectedMesh[k] = 0.0;
     }
   }
 }
@@ -289,15 +304,41 @@ Overset::define_overset_bounding_box()
     stk::all_reduce_min(comm, &minOversetCorner[0], &g_minOversetCorner[0], nDim_);
     stk::all_reduce_max(comm, &maxOversetCorner[0], &g_maxOversetCorner[0], nDim_);
     
-    // copy to the point
+    // copy to the point; with reduction below, be very deliberate since these are cheap loops
     Point minOverset;
     Point maxOverset;
-    
-    NaluEnv::self().naluOutputP0() << "Min/Max coords for overset bounding box" << std::endl;
+
+    // determine translation distance to provide minimum origin at (0,0,0)
+    std::vector<double> translateDistance(nDim_);
     for ( int i = 0; i < nDim_; ++i ) {
+      translateDistance[i] = -g_minOversetCorner[i];
+    }
+
+    // translate
+    for ( int i = 0; i < nDim_; ++i ) {
+      g_minOversetCorner[i] += translateDistance[i];
+      g_maxOversetCorner[i] += translateDistance[i];
+    }
+
+    // reduce the translated box
+    for ( int i = 0; i < nDim_; ++i ) {
+      const double distance = (g_maxOversetCorner[i] - g_minOversetCorner[i])*reductionFactor_;
+      g_minOversetCorner[i] += distance;
+      g_maxOversetCorner[i] -= distance;
+    }
+    
+    // translate back to original
+    for ( int i = 0; i < nDim_; ++i ) {
+      g_minOversetCorner[i] -= translateDistance[i];
+      g_maxOversetCorner[i] -= translateDistance[i];
+    }
+    
+    // inform the user and copy into points
+    NaluEnv::self().naluOutputP0() << "Min/Max coords for overset bounding box" << std::endl;
+    for ( int i = 0; i < nDim_; ++i ) {      
       minOverset[i] = g_minOversetCorner[i];
       maxOverset[i] = g_maxOversetCorner[i];
-      NaluEnv::self().naluOutputP0() << "componenet: " << i << " " << minOverset[i] << " " << maxOverset[i] << std::endl;
+      NaluEnv::self().naluOutputP0() << "component: " << i << " " << minOverset[i] << " " << maxOverset[i] << std::endl;
     }
     
     // set up the processor infor for this bounding box; attach it to rank 0 with id 0
@@ -452,24 +493,24 @@ Overset::cut_surface()
 }
 
 //--------------------------------------------------------------------------
-//-------- define_underlying_bounding_box ----------------------------------
+//-------- define_background_bounding_box ----------------------------------
 //--------------------------------------------------------------------------
 void
-Overset::define_underlying_bounding_box()
+Overset::define_background_bounding_box()
 {
   // obtained via block_1 max/min coords
   
   // setup data structures for search
-  Point minUnderlyingCorner, maxUnderlyingCorner;
+  Point minBackgroundCorner, maxBackgroundCorner;
   
-  stk::mesh::Selector s_locally_owned_union_under = metaData_->locally_owned_part()
+  stk::mesh::Selector s_locally_owned_union_back = metaData_->locally_owned_part()
     &stk::mesh::Selector(*volumePartVector_[0]);
   
-  stk::mesh::BucketVector const& locally_owned_elem_buckets_under =
-    bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_locally_owned_union_under );
+  stk::mesh::BucketVector const& locally_owned_elem_buckets_back =
+    bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_locally_owned_union_back );
   
-  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_elem_buckets_under.begin();
-        ib != locally_owned_elem_buckets_under.end() ; ++ib ) {
+  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_elem_buckets_back.begin();
+        ib != locally_owned_elem_buckets_back.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib;
     
     const stk::mesh::Bucket::size_type length   = b.size();
@@ -480,8 +521,8 @@ Overset::define_underlying_bounding_box()
       
       // initialize max and min
       for (int j = 0; j < nDim_; ++j ) {
-        minUnderlyingCorner[j] = +1.0e16;
-        maxUnderlyingCorner[j] = -1.0e16;
+        minBackgroundCorner[j] = +1.0e16;
+        maxBackgroundCorner[j] = -1.0e16;
       }
       
       // extract elem_node_relations
@@ -496,8 +537,8 @@ Overset::define_underlying_bounding_box()
         
         // check max/min
         for ( int j = 0; j < nDim_; ++j ) {
-          minUnderlyingCorner[j] = std::min(minUnderlyingCorner[j], coords[j]);
-          maxUnderlyingCorner[j] = std::max(maxUnderlyingCorner[j], coords[j]);
+          minBackgroundCorner[j] = std::min(minBackgroundCorner[j], coords[j]);
+          maxBackgroundCorner[j] = std::max(maxBackgroundCorner[j], coords[j]);
         }
       }
       
@@ -507,8 +548,8 @@ Overset::define_underlying_bounding_box()
       searchElementMap_[bulkData_->identifier(element)] = element;
       
       // create the bounding point box and push back
-      boundingElementBox theBox(Box(minUnderlyingCorner,maxUnderlyingCorner), theIdent);
-      boundingElementUnderlyingBoxVec_.push_back(theBox);
+      boundingElementBox theBox(Box(minBackgroundCorner,maxBackgroundCorner), theIdent);
+      boundingElementBackgroundBoxVec_.push_back(theBox);
     }
   }
 }
@@ -519,7 +560,7 @@ Overset::define_underlying_bounding_box()
 void
 Overset::coarse_search()
 {
-  stk::search::coarse_search(boundingElementOversetBoxVec_, boundingElementUnderlyingBoxVec_, searchMethod_, NaluEnv::self().parallel_comm(), searchKeyPair_);
+  stk::search::coarse_search(boundingElementOversetBoxVec_, boundingElementBackgroundBoxVec_, searchMethod_, NaluEnv::self().parallel_comm(), searchKeyPair_);
   
   // iterate search key; extract found elements and push to vector
   std::vector<std::pair<theKey, theKey> >::const_iterator ii;
@@ -550,6 +591,16 @@ void
 Overset::create_inactive_part()
 {
   // nothing yet
+  bulkData_->modification_begin();
+
+  stk::mesh::PartVector thePartVector;
+  thePartVector.push_back(inActivePart_);
+  for ( size_t k = 0; k < intersectedElementVec_.size(); ++k ) {
+    stk::mesh::Entity theElement = intersectedElementVec_[k];
+    bulkData_->change_entity_parts( theElement, thePartVector);
+  }
+
+  bulkData_->modification_end();
 }
 
 //--------------------------------------------------------------------------
@@ -559,21 +610,30 @@ void
 Overset::set_data_on_inactive_part()
 {  
   // hack set element variables
-  for ( size_t k = 0; k < intersectedElementVec_.size(); ++k ) {
-    stk::mesh::Entity theElement = intersectedElementVec_[k];
-    double * e_intersected_mesh = stk::mesh::field_data(*elemIntersectedMesh_, theElement);
-    e_intersected_mesh[0] = 4.0;
-    
-    // paint the nodes
-    stk::mesh::Entity const* elem_node_rels = bulkData_->begin_nodes(theElement);
-    const int num_nodes = bulkData_->num_nodes(theElement);
-    
-    for ( int ni = 0; ni < num_nodes; ++ni ) {
-      stk::mesh::Entity node = elem_node_rels[ni];
-      
-      // pointers to real data
-      double * n_intersected_mesh = stk::mesh::field_data(*nodeIntersectedMesh_, node );
-      *n_intersected_mesh = 4.0;
+
+  stk::mesh::Selector s_inactive = stk::mesh::Selector(*inActivePart_);
+
+  // set nodal fields
+  stk::mesh::BucketVector const& node_buckets = bulkData_->get_buckets( stk::topology::NODE_RANK, s_inactive );
+  for ( stk::mesh::BucketVector::const_iterator ib = node_buckets.begin() ;
+        ib != node_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    double * nodeIntersectedMesh = stk::mesh::field_data(*nodeIntersectedMesh_, b);
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      nodeIntersectedMesh[k] = 1.0;
+    }
+  }
+  
+  // set element fields
+  stk::mesh::BucketVector const& elem_buckets = bulkData_->get_buckets( stk::topology::ELEMENT_RANK, s_inactive );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin() ;
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    double * elemIntersectedMesh = stk::mesh::field_data(*elemIntersectedMesh_, b);
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      elemIntersectedMesh[k] = 1.0;
     }
   }
 }

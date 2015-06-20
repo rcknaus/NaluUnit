@@ -1,7 +1,7 @@
 /*------------------------------------------------------------------------*/
 /*  Copyright 2014 Sandia Corporation.                                    */
 /*  This software is released under the license detailed                  */
-/*  in the file, LICENSE, which is located in the top-level Nalu          */
+/*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 
@@ -59,6 +59,9 @@ public:
 
   void execute();
 
+  // set space for inactive part; intersection of overset with background mesh
+  void declare_inactive_part();
+
   // register nodal and elemental fields
   void register_fields();
 
@@ -71,11 +74,11 @@ public:
   // define the high level overset bounding box
   void define_overset_bounding_box();
 
-  // find the intersection of the surface bounding box on underlying mesh
+  // find the intersection of the surface bounding box on background mesh
   void cut_surface();
 
-  // define the underlying mesh set of bounding boxes
-  void define_underlying_bounding_box();
+  // define the background mesh set of bounding boxes
+  void define_background_bounding_box();
 
   // process the coarse search; will provide the set of bounding boxes within the overset box
   void coarse_search();
@@ -92,9 +95,15 @@ public:
   // provide output
   void output_results();
 
-  // data
+  // aura on/off
   const bool activateAura_;
+
+  // avoid surface cutting and simply use overset mesh as bounding box
   const bool singleOversetBox_;
+
+  // reduce the single overset box by some factor
+  const double reductionFactor_;
+
   const stk::search::SearchMethod searchMethod_;
   double currentTime_;
   size_t resultsFileIndex_;
@@ -119,7 +128,7 @@ public:
 
   // search data structures
   std::vector<boundingElementBox> boundingElementOversetBoxVec_;
-  std::vector<boundingElementBox> boundingElementUnderlyingBoxVec_;
+  std::vector<boundingElementBox> boundingElementBackgroundBoxVec_;
   std::map<uint64_t, stk::mesh::Entity> searchElementMap_;
 
   /* save off product of search */
