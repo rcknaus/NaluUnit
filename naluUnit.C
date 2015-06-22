@@ -10,7 +10,7 @@
 
 // nalu
 #include <NaluEnv.h>
-#include <Overset.h>
+#include <overset/Overset.h>
 
 // util
 #include <stk_util/environment/CPUTime.hpp>

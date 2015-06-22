@@ -6,7 +6,8 @@
 /*------------------------------------------------------------------------*/
 
 
-#include <Overset.h>
+#include <overset/Overset.h>
+#include <overset/OversetInfo.h>
 #include <NaluEnv.h>
 
 // stk_mesh/base/fem
@@ -57,7 +58,8 @@ Overset::Overset()
     nodeIntersectedMesh_(NULL),
     elemIntersectedMesh_(NULL),
     coordinates_(NULL),
-    inActivePart_(NULL)
+    inActivePart_(NULL),
+    backgroundSurfacePart_(NULL)
 {
   // nothing to do
 }
@@ -70,6 +72,11 @@ Overset::~Overset()
   delete bulkData_;
   delete metaData_;
   delete ioBroker_;
+
+  // delete the overset info objects
+  std::vector<OversetInfo*>::iterator ii;
+  for( ii=oversetInfoVec_.begin(); ii!=oversetInfoVec_.end(); ++ii )
+    delete (*ii);
 }
 
 //--------------------------------------------------------------------------
@@ -96,6 +103,9 @@ Overset::execute()
 
    // create the part that represents the intersected elements/nodes; 
    declare_inactive_part();
+
+   // create the part for the surface of the intersected elements/nodes
+   declare_background_surface_part();
 
    // populate bulk data
    ioBroker_->populate_bulk_data();
@@ -124,6 +134,18 @@ Overset::execute()
    // create a part that holds the intersected elements that should be inactive
    create_inactive_part();
 
+   // find the exposed surfaces and place in a part
+   create_exposed_surface_on_inactive_part();
+
+   // populate fringePointSurfaceVec_
+   populate_exposed_surface_fringe_part_vec();
+
+   // define OversetInfo object for each node on the exposed parts
+   create_overset_info_vec();
+
+   // search for points in elements;; isInElement
+   fringe_point_search();
+
    // set the element 
    set_data_on_inactive_part();
    
@@ -143,6 +165,17 @@ Overset::declare_inactive_part()
   // not sure where this needs to be in order for the blcok to show up in the output file?
   std::string partName = "block_3";
   inActivePart_ =  &metaData_->declare_part(partName, stk::topology::ELEMENT_RANK);
+}
+
+//--------------------------------------------------------------------------
+//-------- declare_background_surface_part ---------------------------------
+//--------------------------------------------------------------------------
+void
+Overset::declare_background_surface_part()
+{
+  // not sure where this needs to be in order for the blcok to show up in the output file?
+  std::string partName = "surface_101";
+  backgroundSurfacePart_ =  &metaData_->declare_part(partName, metaData_->side_rank());
 }
 
 //--------------------------------------------------------------------------
@@ -341,10 +374,10 @@ Overset::define_overset_bounding_box()
       NaluEnv::self().naluOutputP0() << "component: " << i << " " << minOverset[i] << " " << maxOverset[i] << std::endl;
     }
     
-    // set up the processor infor for this bounding box; attach it to rank 0 with id 0
+    // set up the processor info for this bounding box; attach it to local rank with unique id
     const size_t overSetBoundingBoxIdent = 0;
-    //const int parallelRankForBoundingBox = 0;
-    stk::search::IdentProc<uint64_t,int> theIdent(overSetBoundingBoxIdent, 0);
+    const int parallelRankForBoundingBox = NaluEnv::self().parallel_rank();
+    stk::search::IdentProc<uint64_t,int> theIdent(overSetBoundingBoxIdent, parallelRankForBoundingBox);
     
     // bounding box for all of the overset mesh
     boundingElementBox oversetBox(Box(minOverset,maxOverset), theIdent);
@@ -567,20 +600,20 @@ Overset::coarse_search()
   for( ii=searchKeyPair_.begin(); ii!=searchKeyPair_.end(); ++ii ) {
     
     const uint64_t theBox = ii->second.id();
-    /* // NOT CORRECT FOR PARALLEL...
-       unsigned theRank = NaluEnv::self().parallel_rank();
-       const unsigned pt_proc = ii->first.proc();
-       const unsigned box_proc = ii->second.proc();
-    */
+    unsigned theRank = NaluEnv::self().parallel_rank();
+    const unsigned box_proc = ii->second.proc();
     
-    // find the element
-    std::map<uint64_t, stk::mesh::Entity>::iterator iterEM;
-    iterEM=searchElementMap_.find(theBox);
-    if ( iterEM == searchElementMap_.end() )
-      throw std::runtime_error("No entry in searchElementMap found");
-    stk::mesh::Entity theElemMeshObj = iterEM->second;
-    
-    intersectedElementVec_.push_back(theElemMeshObj);
+    // if this box in on-rank, extract the element; otherwise, do not worry about it
+    if ( box_proc == theRank ) {
+      // find the element
+      std::map<uint64_t, stk::mesh::Entity>::iterator iterEM;
+      iterEM=searchElementMap_.find(theBox);
+      if ( iterEM == searchElementMap_.end() )
+        throw std::runtime_error("No entry in searchElementMap found");
+      stk::mesh::Entity theElemMeshObj = iterEM->second;
+      
+      intersectedElementVec_.push_back(theElemMeshObj);
+    }
   }
 }
 
@@ -590,7 +623,7 @@ Overset::coarse_search()
 void
 Overset::create_inactive_part()
 {
-  // nothing yet
+  // push all elements intersected to a new part
   bulkData_->modification_begin();
 
   stk::mesh::PartVector thePartVector;
@@ -601,6 +634,105 @@ Overset::create_inactive_part()
   }
 
   bulkData_->modification_end();
+}
+
+//--------------------------------------------------------------------------
+//-------- create_exposed_surface_on_inactive_part -------------------------
+//--------------------------------------------------------------------------
+void
+Overset::create_exposed_surface_on_inactive_part()
+{
+  // I need to figure out the best path forward here... 
+  // use the elem:face:elem relations? Query fields?
+}
+
+//--------------------------------------------------------------------------
+//-------- populate_exposed_surface_fringe_part_vec ------------------------
+//--------------------------------------------------------------------------
+void
+Overset::populate_exposed_surface_fringe_part_vec()
+{
+  // surface_6 and surface_101
+  std::vector<std::string> targetNames;
+  targetNames.push_back("surface_6");
+  targetNames.push_back("surface_101");
+
+  for ( size_t itarget = 0; itarget < targetNames.size(); ++itarget ) {
+    
+    // extract the part
+    stk::mesh::Part *targetPart = metaData_->get_part(targetNames[itarget]);
+    
+    // push back the part
+    fringePointSurfaceVec_.push_back(targetPart);
+  }
+}
+
+//--------------------------------------------------------------------------
+//-------- create_overset_info_vec -----------------------------------------
+//--------------------------------------------------------------------------
+void
+Overset::create_overset_info_vec()
+{
+  Point localNodalCoords;
+
+  stk::mesh::Selector s_locally_owned = metaData_->locally_owned_part()
+    &stk::mesh::selectUnion(fringePointSurfaceVec_);
+  
+  stk::mesh::BucketVector const& locally_owned_node_bucket =
+    bulkData_->get_buckets( stk::topology::NODE_RANK, s_locally_owned );
+  
+  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_node_bucket.begin();
+        ib != locally_owned_node_bucket.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib;
+    
+    const stk::mesh::Bucket::size_type length   = b.size();
+
+    // point to data
+    const double * coords = stk::mesh::field_data(*coordinates_, b);
+
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get node
+      stk::mesh::Entity node = b[k];
+
+      // create the info
+      OversetInfo *theInfo = new OversetInfo(node, nDim_);
+      
+      // push it back
+      oversetInfoVec_.push_back(theInfo);
+      
+      // pointers to real data  
+      const size_t offSet = k*nDim_;
+
+      // fill in nodal coordinates
+      for (int j = 0; j < nDim_; ++j ) {
+        const double xj = coords[offSet+j];
+        theInfo->nodalCoords_[j] = xj;
+        localNodalCoords[j] = xj;
+      }
+    
+      // define the ident
+      stk::search::IdentProc<uint64_t,int> theIdent(bulkData_->identifier(node), NaluEnv::self().parallel_rank());
+
+      // create the bounding point box and push back
+      boundingPoint thePt(localNodalCoords, theIdent);
+      boundingPointVec_.push_back(thePt);
+    }
+  }
+}
+
+//--------------------------------------------------------------------------
+//-------- fringe_point_search ---------------------------------------------
+//--------------------------------------------------------------------------
+void
+Overset::fringe_point_search()
+{
+  searchKeyPair_.clear();
+  stk::search::coarse_search(boundingPointVec_, boundingElementBackgroundBoxVec_, searchMethod_, NaluEnv::self().parallel_comm(), searchKeyPair_);
+
+  // we now have the coarse search for fringe nodes and backgroun bounding box
+
+  // next steps are to ghost and to perform the fine search through isInElement
 }
 
 //--------------------------------------------------------------------------

@@ -1,0 +1,52 @@
+/*------------------------------------------------------------------------*/
+/*  Copyright 2014 Sandia Corporation.                                    */
+/*  This software is released under the license detailed                  */
+/*  in the file, LICENSE, which is located in the top-level Nalu          */
+/*  directory structure                                                   */
+/*------------------------------------------------------------------------*/
+
+
+#ifndef OversetInfo_h
+#define OversetInfo_h
+
+//==============================================================================
+// Includes and forwards
+//==============================================================================
+
+#include <stk_mesh/base/Entity.hpp>
+
+#include <vector>
+
+namespace sierra {
+namespace naluUnit {
+
+//=============================================================================
+// Class Definition
+//=============================================================================
+// OversetInfo
+//=============================================================================
+class OversetInfo {
+
+ public:
+
+  // constructor and destructor
+  OversetInfo(
+    stk::mesh::Entity node,
+    const int nDim );
+
+  ~OversetInfo();
+  
+  stk::mesh::Entity faceNode_;
+  stk::mesh::Entity owningElement_;
+  
+  double bestX_;
+  int elemIsGhosted_;
+  
+  std::vector<double> isoParCoords_;
+  std::vector<double> nodalCoords_;
+};
+  
+} // end sierra namespace
+} // end naluUnit namespace
+
+#endif

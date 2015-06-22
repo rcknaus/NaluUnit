@@ -31,6 +31,7 @@ typedef stk::mesh::Field<double, stk::mesh::SimpleArrayTag>  GenericFieldType;
 typedef stk::search::IdentProc<uint64_t,int>  theKey;
 typedef stk::search::Point<double> Point;
 typedef stk::search::Box<double> Box;
+typedef std::pair<Point,theKey> boundingPoint;
 typedef std::pair<Box,theKey> boundingElementBox;
 
 namespace stk {
@@ -49,6 +50,8 @@ namespace stk {
 namespace sierra {
 namespace naluUnit {
 
+class OversetInfo;
+
 class Overset
 {
 public:
@@ -62,6 +65,9 @@ public:
   // set space for inactive part; intersection of overset with background mesh
   void declare_inactive_part();
 
+  // set space for inactive part exposed surfaces
+  void declare_background_surface_part();
+  
   // register nodal and elemental fields
   void register_fields();
 
@@ -85,6 +91,18 @@ public:
 
   // create a part that will represent the inacative parts
   void create_inactive_part();
+
+  // skin the inactive part to obtain a surface part
+  void create_exposed_surface_on_inactive_part();
+
+  // populate fringePointSurfaceVec_
+  void populate_exposed_surface_fringe_part_vec();
+
+  // create an OversetInfo object for each locally owned exposed node
+  void create_overset_info_vec();
+
+  // point/element search
+  void fringe_point_search();
 
   // set data on inactive part
   void set_data_on_inactive_part();
@@ -129,6 +147,7 @@ public:
   // search data structures
   std::vector<boundingElementBox> boundingElementOversetBoxVec_;
   std::vector<boundingElementBox> boundingElementBackgroundBoxVec_;
+  std::vector<boundingPoint>      boundingPointVec_;
   std::map<uint64_t, stk::mesh::Entity> searchElementMap_;
 
   /* save off product of search */
@@ -139,6 +158,15 @@ public:
 
   // part associated with inactive elements
   stk::mesh::Part *inActivePart_;
+
+  // part associated with exposed surfaces for inactive elements
+  stk::mesh::Part *backgroundSurfacePart_;
+
+  // hold a vector of parts that correspond to the exposed surface fringe points
+  stk::mesh::PartVector fringePointSurfaceVec_;
+
+  // vector of overset information: contains fringe node -> element 
+  std::vector<OversetInfo *> oversetInfoVec_;
 };
 
 } // namespace naluUnit
