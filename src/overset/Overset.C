@@ -18,6 +18,7 @@
 #include <stk_mesh/base/GetBuckets.hpp>
 #include <stk_mesh/base/Part.hpp>
 #include <stk_mesh/base/Selector.hpp>
+#include <stk_mesh/base/SkinMesh.hpp>
 
 // stk_search
 #include <stk_search/CoarseSearch.hpp>
@@ -626,24 +627,67 @@ Overset::create_inactive_part()
   // push all elements intersected to a new part
   bulkData_->modification_begin();
 
-  stk::mesh::PartVector thePartVector;
-  thePartVector.push_back(inActivePart_);
+  stk::mesh::PartVector theNewPartVector;
+  theNewPartVector.push_back(inActivePart_);
   for ( size_t k = 0; k < intersectedElementVec_.size(); ++k ) {
     stk::mesh::Entity theElement = intersectedElementVec_[k];
-    bulkData_->change_entity_parts( theElement, thePartVector);
+    // add to block_3
+    bulkData_->change_entity_parts( theElement, theNewPartVector);
+  }
+  bulkData_->modification_end();
+
+  // try to remove these elements from block_1... fails in a later nodal loop..
+  const bool removeOld = false;
+  if ( removeOld ) {
+    bulkData_->modification_begin();
+    stk::mesh::PartVector theOldPartVector;
+    stk::mesh::PartVector theEmptyPartVector;
+    theOldPartVector.push_back(volumePartVector_[0]);
+    for ( size_t k = 0; k < intersectedElementVec_.size(); ++k ) {
+      stk::mesh::Entity theElement = intersectedElementVec_[k];
+      // remove from block_1
+      bulkData_->change_entity_parts( theElement, theEmptyPartVector, theOldPartVector);
+    }
+    bulkData_->modification_end();  
   }
 
-  bulkData_->modification_end();
 }
-
 //--------------------------------------------------------------------------
 //-------- create_exposed_surface_on_inactive_part -------------------------
 //--------------------------------------------------------------------------
 void
 Overset::create_exposed_surface_on_inactive_part()
 {
-  // I need to figure out the best path forward here... 
-  // use the elem:face:elem relations? Query fields?
+  // skin the inactive part to obtain all exposed surface
+  stk::mesh::Selector s_inactive = stk::mesh::Selector(*inActivePart_);
+  stk::mesh::PartVector partToSkinVec;
+  stk::mesh::PartVector partToPopulateVec;
+  partToSkinVec.push_back(inActivePart_); // block_3
+  partToPopulateVec.push_back(backgroundSurfacePart_); // surface_101
+  stk::mesh::skin_mesh(*bulkData_, s_inactive, partToPopulateVec, &s_inactive);
+
+  // now output for debug purposes
+  stk::mesh::Selector s_locally_owned = metaData_->locally_owned_part()
+    &stk::mesh::Selector(*backgroundSurfacePart_);
+
+  stk::mesh::BucketVector const& locally_owned_node_bucket =
+    bulkData_->get_buckets( stk::topology::NODE_RANK, s_locally_owned );
+
+  for ( stk::mesh::BucketVector::const_iterator ib = locally_owned_node_bucket.begin();
+        ib != locally_owned_node_bucket.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib;
+    
+    const stk::mesh::Bucket::size_type length   = b.size();
+
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get node
+      stk::mesh::Entity node = b[k];
+      
+      // output identifier
+      NaluEnv::self().naluOutputP0() << "nodes on surface id " << bulkData_->identifier(node) << std::endl;
+    }
+  }
 }
 
 //--------------------------------------------------------------------------
