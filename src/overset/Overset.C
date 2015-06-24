@@ -163,7 +163,6 @@ Overset::execute()
 void
 Overset::declare_inactive_part()
 {
-  // not sure where this needs to be in order for the blcok to show up in the output file?
   std::string partName = "block_3";
   inActivePart_ =  &metaData_->declare_part(partName, stk::topology::ELEMENT_RANK);
 }
@@ -174,9 +173,12 @@ Overset::declare_inactive_part()
 void
 Overset::declare_background_surface_part()
 {
-  // not sure where this needs to be in order for the blcok to show up in the output file?
+  // declare it
   std::string partName = "surface_101";
   backgroundSurfacePart_ =  &metaData_->declare_part(partName, metaData_->side_rank());
+
+  // inform io to send it to the output file
+  stk::io::put_io_part_attribute(*backgroundSurfacePart_);
 }
 
 //--------------------------------------------------------------------------
