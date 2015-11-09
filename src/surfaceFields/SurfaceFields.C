@@ -136,7 +136,7 @@ SurfaceFields::register_fields()
         NaluEnv::self().naluOutputP0() << "Subsetting on part: " << subsetPart->name() << std::endl;
 
         // put nodal fields
-        stk::mesh::put_field(*normalHeatFlux_, *targetPart);    
+        stk::mesh::put_field(*normalHeatFlux_, *subsetPart);    
       }
     }
     else {
