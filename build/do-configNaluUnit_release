@@ -1,5 +1,5 @@
 nalu_build_dir=/home/spdomin/gitHubWork/scratch_build
-trilinos_install_dir=$nalu_build_dir/install/trilinos_nightly
+trilinos_install_dir=$nalu_build_dir/install/trilinos_release
 
 EXTRA_ARGS=$@
 

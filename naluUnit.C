@@ -11,6 +11,7 @@
 // nalu
 #include <NaluEnv.h>
 #include <overset/Overset.h>
+#include <surfaceFields/SurfaceFields.h>
 
 // util
 #include <stk_util/environment/CPUTime.hpp>
@@ -74,15 +75,26 @@ int main( int argc, char ** argv )
   
   naluEnv.naluOutputP0() << "NaluUnit Shall Commence" << std::endl;
  
-  // create overset unit test
-  sierra::naluUnit::Overset *overset = new sierra::naluUnit::Overset();
-  
-  // execute it
-  overset->execute();
+  //==============================
+  // create; execute; delete
+  //==============================
 
-  // delete it
-  delete overset;
-  
+  // overset
+  const bool doOverset = true;
+  if ( doOverset ) {
+    sierra::naluUnit::Overset *overset = new sierra::naluUnit::Overset();
+    overset->execute();
+    delete overset;
+  }
+
+  // surface
+  const bool doSurfaceFields = true;
+  if ( doSurfaceFields ) {
+    sierra::naluUnit::SurfaceFields *surfaceFields = new sierra::naluUnit::SurfaceFields();
+    surfaceFields->execute();
+    delete surfaceFields;
+  }
+
   // all done  
   return 0;
 }

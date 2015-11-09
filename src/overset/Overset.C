@@ -256,8 +256,8 @@ Overset::initialize_fields()
     double * nodeOversetMesh = stk::mesh::field_data(*nodeOversetMesh_, b);
     double * nodeIntersectedMesh = stk::mesh::field_data(*nodeIntersectedMesh_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      nodeBackgroundMesh[k] = 1.0;
-      nodeOversetMesh[k] = 2.0;
+      nodeBackgroundMesh[k] = 0.0;
+      nodeOversetMesh[k] = 0.0;
       nodeIntersectedMesh[k] = 0.0;
     }
   }
@@ -272,8 +272,8 @@ Overset::initialize_fields()
     double * elemOversetMesh= stk::mesh::field_data(*elemOversetMesh_, b);
     double * elemIntersectedMesh = stk::mesh::field_data(*elemIntersectedMesh_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      elemBackgroundMesh[k] = 1.0;
-      elemOversetMesh[k] = 2.0;
+      elemBackgroundMesh[k] = 0.0;
+      elemOversetMesh[k] = 0.0;
       elemIntersectedMesh[k] = 0.0;
     }
   }
@@ -668,6 +668,7 @@ Overset::create_exposed_surface_on_inactive_part()
   partToPopulateVec.push_back(backgroundSurfacePart_); // surface_101
   stk::mesh::skin_mesh(*bulkData_, s_inactive, partToPopulateVec, &s_inactive);
 
+  size_t numNodes = 0;
   // now output for debug purposes
   stk::mesh::Selector s_locally_owned = metaData_->locally_owned_part()
     &stk::mesh::Selector(*backgroundSurfacePart_);
@@ -687,7 +688,7 @@ Overset::create_exposed_surface_on_inactive_part()
       stk::mesh::Entity node = b[k];
       
       // output identifier
-      NaluEnv::self().naluOutputP0() << "nodes on surface id " << bulkData_->identifier(node) << std::endl;
+      NaluEnv::self().naluOutputP0() << "nodes on surface id " << bulkData_->identifier(node) << " " << numNodes++ << std::endl;
     }
   }
 }
@@ -787,9 +788,10 @@ Overset::fringe_point_search()
 void
 Overset::set_data_on_inactive_part()
 {  
-  // hack set element variables
-
-  stk::mesh::Selector s_inactive = stk::mesh::Selector(*inActivePart_);
+  // hack set element variables; block_1, block_2 and not inActivePart_
+  
+  stk::mesh::Selector s_inactive = stk::mesh::selectUnion(volumePartVector_) 
+    &!(stk::mesh::Selector(*inActivePart_) & !(stk::mesh::Selector(*backgroundSurfacePart_)));
 
   // set nodal fields
   stk::mesh::BucketVector const& node_buckets = bulkData_->get_buckets( stk::topology::NODE_RANK, s_inactive );
