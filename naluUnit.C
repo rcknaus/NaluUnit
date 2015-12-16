@@ -12,6 +12,7 @@
 #include <NaluEnv.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
+#include <element_promotion/PromoteElementTest.h>
 
 // util
 #include <stk_util/environment/CPUTime.hpp>
@@ -80,7 +81,7 @@ int main( int argc, char ** argv )
   //==============================
 
   // overset
-  const bool doOverset = true;
+  const bool doOverset = false;
   if ( doOverset ) {
     sierra::naluUnit::Overset *overset = new sierra::naluUnit::Overset();
     overset->execute();
@@ -88,11 +89,32 @@ int main( int argc, char ** argv )
   }
 
   // surface
-  const bool doSurfaceFields = true;
+  const bool doSurfaceFields = false;
   if ( doSurfaceFields ) {
     sierra::naluUnit::SurfaceFields *surfaceFields = new sierra::naluUnit::SurfaceFields();
     surfaceFields->execute();
     delete surfaceFields;
+  }
+
+  const bool doPromotionQuad9 = true;
+  if ( doPromotionQuad9 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad9", "test_meshes/quad4_64.g");
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionQuad16 = true;
+  if ( doPromotionQuad16 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad16", "test_meshes/quad4_64.g");
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionHex27 = false;
+  if ( doPromotionHex27 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Hex27", "test_meshes/hex8_32.g");
+    promoteTest->execute();
+    delete promoteTest;
   }
 
   // all done  
