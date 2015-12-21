@@ -1,26 +1,38 @@
 #include <element_promotion/PromotedElementIO.h>
-#include <NaluEnv.h>
+
 #include <element_promotion/PromoteElement.h>
+#include <element_promotion/ElementDescription.h>
 #include <nalu_make_unique.h>
 
-// stk_mesh/base/fem
 #include <stk_mesh/base/MetaData.hpp>
-#include <stk_mesh/base/Field.hpp>
-#include <stk_mesh/base/FieldParallel.hpp>
-#include <stk_mesh/base/GetBuckets.hpp>
 #include <stk_mesh/base/Part.hpp>
 #include <stk_mesh/base/Selector.hpp>
 #include <stk_topology/topology.hpp>
+#include <stk_mesh/base/Bucket.hpp>
+#include <stk_mesh/base/BulkData.hpp>
+#include <stk_mesh/base/BulkDataInlinedMethods.hpp>
+#include <stk_mesh/base/Entity.hpp>
+#include <stk_mesh/base/FieldBase.hpp>
+#include <stk_mesh/base/FieldRestriction.hpp>
+#include <stk_topology/topology.tcc>
+#include <stk_util/environment/ReportHandler.hpp>
 
-// stk_io
-#include <stk_io/StkMeshIoBroker.hpp>
-#include <Ioss_ConcreteVariableType.h>
-#include <init/Ionit_Initializer.h>
-#include <stk_topology/topology.hpp>
+#include <Ioss_DBUsage.h>
+#include <Ioss_DatabaseIO.h>
+#include <Ioss_ElementBlock.h>
+#include <Ioss_Field.h>
+#include <Ioss_IOFactory.h>
+#include <Ioss_NodeBlock.h>
+#include <Ioss_Property.h>
+#include <Ioss_PropertyManager.h>
+#include <Ioss_SideBlock.h>
+#include <Ioss_SideSet.h>
+#include <Ioss_State.h>
 
-// stk_util
-#include <stk_util/parallel/ParallelReduce.hpp>
-#include <array>
+#include <algorithm>
+#include <iostream>
+#include <stdexcept>
+#include <utility>
 
 namespace sierra{
 namespace naluUnit{
@@ -102,9 +114,6 @@ PromotedElementIO::write_database_data(double currentTime)
       else if (field.type_is<double>()) {
         put_data_on_node_block<double>(*nodeBlock_, field, nodeBuckets, numNodes);
       }
-      else if (field.type_is<size_t>()) {
-        put_data_on_node_block<size_t>(*nodeBlock_, field, nodeBuckets, numNodes);
-      }
       else {
         throw std::runtime_error("Unknown type");
       }
@@ -140,24 +149,32 @@ PromotedElementIO::put_data_on_node_block(
 
   size_t index = 0;
   for (const auto* bucketPtr : buckets) {
-    for (auto& node : *bucketPtr) {
+    const auto* field_data = static_cast<T*>(
+      stk::mesh::field_data(field, *bucketPtr));
+    const size_t length = bucketPtr->size();
+    size_t field_index = 0;
+    for (size_t k = 0; k < length; ++k) {
       for (int j = 0; j < fieldLength; ++j) {
-        flat_array[index] = *static_cast<T*>(stk::mesh::field_data(field, node));
-        ++index;
+        flat_array[index] = field_data[field_index];
+        ++index; ++field_index;
       }
     }
   }
-  nodeBlock.put_field_data(field.name(), flat_array.data(), flat_array.size()*sizeof(T));
+  nodeBlock.put_field_data(field.name(),
+   flat_array.data(), flat_array.size() * sizeof(T));
 }
 //--------------------------------------------------------------------------
 void
-PromotedElementIO::write_elem_block_definitions(const stk::mesh::PartVector& baseParts)
+PromotedElementIO::write_elem_block_definitions(
+  const stk::mesh::PartVector& baseParts)
 {
   for(const auto* ip : baseParts) {
     if (ip->topology().rank() == stk::topology::ELEM_RANK) {
       const auto& selector     = *ip & metaData_.locally_owned_part();
-      const auto& elemBuckets  = bulkData_.get_buckets(stk::topology::ELEM_RANK, selector);
-      const size_t numSubElems = promoteElement_.num_sub_elements(metaData_,elemBuckets);
+      const auto& elemBuckets  = bulkData_.get_buckets(
+        stk::topology::ELEM_RANK, selector);
+      const size_t numSubElems = promoteElement_.num_sub_elements(
+        metaData_,elemBuckets);
 
       auto block = make_unique<Ioss::ElementBlock>(
         databaseIO,
@@ -182,16 +199,19 @@ PromotedElementIO::write_node_block_definitions(
 {
   auto& all_nodes = metaData_.universal_part();
 
-  const auto& nodeBuckets = bulkData_.get_buckets(stk::topology::NODE_RANK, all_nodes);
+  const auto& nodeBuckets = bulkData_.get_buckets(
+    stk::topology::NODE_RANK, all_nodes);
   auto nodeCount = promoteElement_.count_entities(nodeBuckets);
-  auto nodeBlock = make_unique<Ioss::NodeBlock>(databaseIO, "nodeblock", nodeCount, nDim_);
+  auto nodeBlock = make_unique<Ioss::NodeBlock>(
+    databaseIO, "nodeblock", nodeCount, nDim_);
   ThrowRequireMsg(nodeBlock != nullptr, "Node block creation failed");
   nodeBlock_ = nodeBlock.get();
   output_->add(nodeBlock.release());
 }
 //--------------------------------------------------------------------------
 void
-PromotedElementIO::write_sideset_definitions(const stk::mesh::PartVector& baseParts)
+PromotedElementIO::write_sideset_definitions(
+  const stk::mesh::PartVector& baseParts)
 {
   for(const auto* ip : baseParts) {
     const auto& part = *ip;
@@ -231,8 +251,7 @@ PromotedElementIO::write_sideset_definitions(const stk::mesh::PartVector& basePa
       );
       ThrowRequireMsg(block != nullptr, "Sideblock creation failed");
 
-      auto result = sideBlockPointers_.insert(
-        { subpartPtr, block.get() });
+      auto result = sideBlockPointers_.insert({ subpartPtr, block.get() });
       ThrowRequireMsg(result.second, "Attempted to add redundant subpart");
 
       sideset->add(block.release());
@@ -311,12 +330,12 @@ PromotedElementIO::write_coordinate_list(
   }
   nodeBlock_->put_field_data("ids", node_ids);
   nodeBlock_->put_field_data("mesh_model_coordinates",
-    &coordvec[0],
+    coordvec.data(),
     nodeCount * nDim_ * sizeof(double)
   );
 
 }
-
+//--------------------------------------------------------------------------
 void
 PromotedElementIO::write_element_connectivity(
   const stk::mesh::PartVector& baseParts,
@@ -381,34 +400,47 @@ PromotedElementIO::write_sideset_connectivity(
   //FIXME(rcknaus): implement
 }
 //--------------------------------------------------------------------------
-bool
-PromotedElementIO::add_field(const stk::mesh::FieldBase& field)
+void
+PromotedElementIO::add_fields(const std::vector<stk::mesh::FieldBase*>& fields)
 {
-  auto result = fields_.insert(&field);
-  bool wasFieldAdded = result.second;
+  output_->begin_mode(Ioss::STATE_DEFINE_TRANSIENT);
+  for (const auto* fieldPtr : fields) {
+    const auto& field = *fieldPtr;
 
-  if (wasFieldAdded) {
-    output_->begin_mode(Ioss::STATE_DEFINE_TRANSIENT);
-    int nb_size = nodeBlock_->get_property("entity_count").get_int();
+    auto result = fields_.insert(fieldPtr);
+    bool wasFieldAdded = result.second;
 
-    std::string storageType = storage_name(field);
-    if (field.type_is<int>()) {
-      nodeBlock_->field_add(
-        Ioss::Field(field.name(), Ioss::Field::INTEGER,  storageType, Ioss::Field::TRANSIENT, nb_size)
-      );
-    }
-    else if (field.type_is<double>()) {
-      nodeBlock_->field_add(
-        Ioss::Field(field.name(), Ioss::Field::DOUBLE,  storageType, Ioss::Field::TRANSIENT, nb_size)
-      );
-    }
-    else {
-      throw std::runtime_error("Only int and double fields supported");
-    }
+    if (wasFieldAdded) {
+      int nb_size = nodeBlock_->get_property("entity_count").get_int();
 
-    output_->end_mode(Ioss::STATE_DEFINE_TRANSIENT);
+      if (field.type_is<int>()) {
+        nodeBlock_->field_add(
+          Ioss::Field(
+            field.name(),
+            Ioss::Field::INTEGER,
+            storage_name(field),
+            Ioss::Field::TRANSIENT,
+            nb_size
+          )
+        );
+      }
+      else if (field.type_is<double>()) {
+        nodeBlock_->field_add(
+          Ioss::Field(
+            field.name(),
+            Ioss::Field::DOUBLE,
+            storage_name(field),
+            Ioss::Field::TRANSIENT,
+            nb_size
+          )
+        );
+      }
+      else {
+        throw std::runtime_error("Only int and double fields supported");
+      }
+    }
   }
-  return wasFieldAdded;
+  output_->end_mode(Ioss::STATE_DEFINE_TRANSIENT);
 }
 //--------------------------------------------------------------------------
 std::string

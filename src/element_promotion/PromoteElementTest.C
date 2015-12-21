@@ -5,33 +5,37 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/PromoteElementTest.h>
-#include <element_promotion/PromoteElement.h>
-#include <element_promotion/PromotedElementIO.h>
+
+#include <NaluEnv.h>
 #include <element_promotion/ElementDescription.h>
 #include <element_promotion/MasterElement.h>
 #include <element_promotion/MasterElementHO.h>
-
-// Nalu tools
-#include <NaluEnv.h>
+#include <element_promotion/PromoteElement.h>
+#include <element_promotion/PromotedElementIO.h>
+#include <element_promotion/TensorProductQuadratureRule.h>
 #include <nalu_make_unique.h>
 
-// stk_mesh/base
-#include <stk_mesh/base/MetaData.hpp>
+#include <stk_io/StkMeshIoBroker.hpp>
 #include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/FieldParallel.hpp>
-#include <stk_mesh/base/GetBuckets.hpp>
-#include <stk_mesh/base/Part.hpp>
+#include <stk_mesh/base/MetaData.hpp>
 #include <stk_mesh/base/Selector.hpp>
-
-// stk_io
-#include <stk_io/StkMeshIoBroker.hpp>
-
-// stk_util
 #include <stk_util/parallel/ParallelReduce.hpp>
+#include <stk_io/DatabasePurpose.hpp>
+#include <stk_mesh/base/Bucket.hpp>
+#include <stk_mesh/base/BulkData.hpp>
+#include <stk_mesh/base/BulkDataInlinedMethods.hpp>
+#include <stk_mesh/base/Entity.hpp>
+#include <stk_mesh/base/FieldBase.hpp>
+#include <stk_mesh/base/Types.hpp>
+#include <stk_topology/topology.hpp>
+#include <stk_util/environment/ReportHandler.hpp>
+#include <stk_util/parallel/Parallel.hpp>
 
-// STL
+#include <cmath>
+#include <iostream>
+#include <limits>
 #include <random>
-
 
 namespace sierra{
 namespace naluUnit{
@@ -52,13 +56,14 @@ PromoteElementTest::PromoteElementTest(std::string elemType, std::string meshNam
     meshName_(meshName),
     coarseOutputName_("test_output/coarse_output/coarse_" + elemType + ".e"),
     fineOutputName_("test_output/fine_output/fine_" + elemType + ".e"),
-    floatingPointTolerance_(1.0e-11)
+    floatingPointTolerance_(1.0e-11),
+    constScalarField_(true)
 {
 }
 //--------------------------------------------------------------------------
 PromoteElementTest::~PromoteElementTest() {}
 //--------------------------------------------------------------------------
-void 
+void
 PromoteElementTest::execute()
 {
   NaluEnv::self().naluOutputP0() << "Welcome to the PromoteElement unit test" << std::endl;
@@ -70,6 +75,28 @@ PromoteElementTest::execute()
 
   elem_ = ElementDescription::create(elemType_);
   ThrowRequire(elem_ != nullptr);
+
+  if (elemType_ == "Quad9") {
+    std::vector<unsigned> nodeMap =
+    {
+        0, 4, 1,
+        7, 8, 5,
+        3, 6, 2
+    };
+    ThrowRequire(elem_->nodeMap == nodeMap);
+  }
+  else if (elemType_ == "Quad16")
+  {
+    std::vector<unsigned> nodeMap =
+      {
+          0, 4, 5, 1,
+          11, 12, 13, 6,
+          10, 14, 15, 7,
+          3, 9, 8, 2
+      };
+    ThrowRequire(elem_->nodeMap == nodeMap);
+  }
+
   promoteElement_ = make_unique<PromoteElement>(*elem_);
   ThrowRequire(promoteElement_ != nullptr);
 
@@ -95,10 +122,12 @@ PromoteElementTest::execute()
   bool interpCheck = false;
   bool derivCheck = false;
   bool quadCheck = false;
+  bool pngCheck = false;
   if (nDim_ == 2) {
     interpCheck = check_interpolation();
     derivCheck = check_derivative();
     quadCheck = check_volume_quadrature();
+    pngCheck = check_projected_nodal_gradient();
   }
   bool nodeCountCheck = check_node_count(elem_->polyOrder, originalNodes);
 
@@ -107,12 +136,14 @@ PromoteElementTest::execute()
   auto timeE = MPI_Wtime();
   compute_dual_nodal_volume();
   auto timeF = MPI_Wtime();
+  compute_projected_nodal_gradient();
+  auto timeG = MPI_Wtime();
 
   bool dnvCheck = check_dual_nodal_volume();
   set_output_fields();
   output_results();
 
-  auto timeG = MPI_Wtime();
+  auto timeH = MPI_Wtime();
 
   NaluEnv::self().naluOutputP0() << "Time to setup-mesh: "
       << timing_wall(timeA,timeB) << std::endl;
@@ -120,8 +151,12 @@ PromoteElementTest::execute()
       << timing_wall(timeC,timeD) << std::endl;
   NaluEnv::self().naluOutputP0() << "Time to compute dual nodal volume: "
       << timing_wall(timeE,timeF) << std::endl;
+  if (nDim_ == 2) {
+    NaluEnv::self().naluOutputP0() << "Time to compute projected nodal gradient: "
+        << timing_wall(timeF,timeG) << std::endl;
+  }
   NaluEnv::self().naluOutputP0() << "Total time for test: "
-      << timing_wall(timeA,timeG) << std::endl;
+      << timing_wall(timeA,timeH) << std::endl;
 
   NaluEnv::self().naluOutputP0() << "-------------------------"
       << std::endl;
@@ -133,6 +168,8 @@ PromoteElementTest::execute()
         <<  passFail[derivCheck] << std::endl;
     NaluEnv::self().naluOutputP0() << "Quadrature test: "
         <<  passFail[quadCheck] << std::endl;
+    NaluEnv::self().naluOutputP0() << "Projected Nodal Gradient test: "
+            <<  passFail[pngCheck] << std::endl;
   }
 
   NaluEnv::self().naluOutputP0() << "Node count test: "
@@ -186,17 +223,39 @@ PromoteElementTest::timing_wall(double timeA, double timeB)
 void
 PromoteElementTest::compute_dual_nodal_volume()
 {
+  auto selector = stk::mesh::selectUnion(originalPartVector_)
+                & metaData_->locally_owned_part();
   if (nDim_ == 2) {
     compute_dual_nodal_volume_interior(
-      HigherOrderQuad2DSCV{*elem_},
-      stk::mesh::selectUnion(originalPartVector_)
+      HigherOrderQuad2DSCV{*elem_}, selector
     );
   }
   else {
-    compute_dual_nodal_volume_interior(
-      Hex27SCV{},
-      stk::mesh::selectUnion(originalPartVector_)
+    compute_dual_nodal_volume_interior(Hex27SCV{}, selector);
+  }
+}
+
+//--------------------------------------------------------------------------
+void
+PromoteElementTest::compute_projected_nodal_gradient()
+{
+  auto selector = stk::mesh::selectUnion(originalPartVector_)
+                & metaData_->locally_owned_part();
+  if (nDim_ == 2) {
+    compute_projected_nodal_gradient_interior(
+      HigherOrderQuad2DSCS{*elem_}, selector
     );
+
+    compute_projected_nodal_gradient_boundary(
+      HigherOrderEdge2DSCS{*elem_}, selector
+    );
+  }
+  else {
+    //wip
+  }
+
+  if (bulkData_->parallel_size() > 1) {
+    stk::mesh::parallel_sum(*bulkData_, {dqdx_});
   }
 }
 //--------------------------------------------------------------------------
@@ -236,7 +295,7 @@ PromoteElementTest::check_interpolation()
       coeffsY[k] = coeff(rng);
     }
 
-    interpWeights = elem_->eval_basis_weights(elem_->dimension, intgLoc);
+    interpWeights = elem_->eval_basis_weights(intgLoc);
 
     for (unsigned i = 0; i < elem_->nodes1D; ++i) {
       for (unsigned j = 0; j < elem_->nodes1D; ++j) {
@@ -268,8 +327,7 @@ PromoteElementTest::check_interpolation()
       testPassed = true;
     }
     else {
-      testPassed = false;
-      break;
+      return false;
     }
   }
   return testPassed;
@@ -304,7 +362,7 @@ PromoteElementTest::check_derivative()
       intgLoc[offset+1] = loc(rng);
     }
 
-    std::vector<double> diffWeights = elem_->eval_deriv_weights(elem_->dimension,intgLoc);
+    std::vector<double> diffWeights = elem_->eval_deriv_weights(intgLoc);
 
     for (unsigned k = 0; k < elem_->polyOrder+1; ++k) {
       coeffsX[k] = coeff(rng);
@@ -347,8 +405,7 @@ PromoteElementTest::check_derivative()
       testPassed = true;
     }
     else {
-      testPassed = false;
-      break;
+      return false;
     }
   }
   return testPassed;
@@ -408,8 +465,7 @@ PromoteElementTest::check_volume_quadrature()
       testPassed = true;
     }
     else {
-      testPassed = false;
-      break;
+      return false;
     }
   }
 
@@ -497,7 +553,7 @@ PromoteElementTest::count_nodes(stk::mesh::Selector selector)
 void
 PromoteElementTest::compute_dual_nodal_volume_interior(
   MasterElement&& masterElement,
-  stk::mesh::Selector selector)
+  stk::mesh::Selector& selector)
 {
   // extract master element specifics
   const int nodesPerElement = masterElement.nodesPerElement_;
@@ -545,6 +601,153 @@ PromoteElementTest::compute_dual_nodal_volume_interior(
 }
 //--------------------------------------------------------------------------
 void
+PromoteElementTest::compute_projected_nodal_gradient_interior(
+  HigherOrderQuad2DSCS&& meSCS,
+  stk::mesh::Selector& selector)
+{
+  const auto& elem_buckets = bulkData_->get_buckets(stk::topology::ELEM_RANK, selector);
+  for (const auto* ib : elem_buckets ) {
+    const stk::mesh::Bucket & b = *ib ;
+    const stk::mesh::Bucket::size_type length = b.size();
+
+    int dimension = meSCS.nDim_;
+    auto numScsIp = meSCS.numIntPoints_;
+    auto nodesPerElement = meSCS.nodesPerElement_;
+
+    std::vector<double> ws_scalar(nodesPerElement);
+    std::vector<double> ws_dualVolume(nodesPerElement);
+    std::vector<double> ws_coords(2*nodesPerElement);
+    std::vector<double> ws_areav(2*numScsIp);
+    std::vector<double> ws_dqdx(2*numScsIp);
+    const auto* lrscv = meSCS.adjacentNodes();
+
+    for (size_t k = 0; k < length; ++k) {
+      const auto& ws_shape_function = meSCS.shapeFunctions_;
+      const auto* node_rels = promoteElement_->begin_nodes_all(b, k);
+
+      for (int ni = 0; ni < nodesPerElement; ++ni) {
+        stk::mesh::Entity node = node_rels[ni];
+
+        const double * coords = stk::mesh::field_data(*coordinates_, node);
+
+        // gather scalars
+        ws_scalar[ni]     = *stk::mesh::field_data(*q_, node);
+        ws_dualVolume[ni] = *stk::mesh::field_data(*dualNodalVolume_, node);
+
+        // gather vectors
+        const int offSet = ni*dimension;
+        for ( int j=0; j < dimension; ++j ) {
+          ws_coords[offSet+j] = coords[j];
+        }
+      }
+
+      double scs_error = 0.0;
+      meSCS.determinant(1, ws_coords.data(), ws_areav.data(), &scs_error);
+
+      for (int ip = 0; ip < numScsIp; ++ip) {
+        const int il = lrscv[2*ip];
+        const int ir = lrscv[2*ip+1];
+
+        double* gradQL = stk::mesh::field_data(*dqdx_, node_rels[il]);
+        double* gradQR = stk::mesh::field_data(*dqdx_, node_rels[ir]);
+
+        double qIp = 0.0;
+        const int offSet = ip*nodesPerElement;
+        for (int ic = 0; ic < nodesPerElement; ++ic) {
+          qIp += ws_shape_function[offSet+ic]*ws_scalar[ic];
+        }
+
+        double inv_volL = 1.0/ws_dualVolume[il];
+        double inv_volR = 1.0/ws_dualVolume[ir];
+
+        for ( int j = 0; j < dimension; ++j ) {
+          double fac = qIp*ws_areav[ip*dimension+j];
+          gradQL[j] += fac*inv_volL;
+          gradQR[j] -= fac*inv_volR;
+        }
+      }
+    }
+  }
+}
+//--------------------------------------------------------------------------
+void
+PromoteElementTest::compute_projected_nodal_gradient_boundary(
+  HigherOrderEdge2DSCS&& meSCS,
+  stk::mesh::Selector& selector)
+{
+  const auto& side_buckets =
+      bulkData_->get_buckets(metaData_->side_rank(), selector);
+
+  int dimension = meSCS.nDim_;
+  for (const auto* ib : side_buckets ) {
+    const stk::mesh::Bucket& b = *ib ;
+    const stk::mesh::Bucket::size_type length = b.size();
+
+    auto numScsIp = meSCS.numIntPoints_;
+    auto nodesPerFace = meSCS.nodesPerElement_;
+
+    std::vector<double> ws_scalar(nodesPerFace);
+    std::vector<double> ws_dualVolume(nodesPerFace);
+    std::vector<double> ws_coords(2*nodesPerFace);
+    std::vector<double> ws_areav(2*numScsIp);
+    std::vector<double> ws_dqdx(2*numScsIp);
+    const auto* ipNodeMap = meSCS.ipNodeMap();
+
+    std::vector<double> ws_shape_function(nodesPerFace*numScsIp);
+    meSCS.shape_fcn(ws_shape_function.data());
+
+    for (size_t k = 0; k < length; ++k) {
+      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
+
+      for (int ni = 0; ni < nodesPerFace; ++ni) {
+        stk::mesh::Entity node = face_node_rels[ni];
+
+        const double * coords = stk::mesh::field_data(*coordinates_, node);
+
+        // gather scalars
+        ws_scalar[ni]     = *stk::mesh::field_data(*q_, node);
+        ws_dualVolume[ni] = *stk::mesh::field_data(*dualNodalVolume_, node);
+
+        // gather vectors
+        const int offSet = ni*dimension;
+        for ( int j=0; j < dimension; ++j ) {
+          ws_coords[offSet+j] = coords[j];
+        }
+       }
+
+      double scs_error = 0.0;
+      meSCS.determinant(1, ws_coords.data(), ws_areav.data(), &scs_error);
+
+      for (int ip = 0; ip < numScsIp; ++ip) {
+        const int nn = ipNodeMap[ip];
+
+        stk::mesh::Entity nodeNN = face_node_rels[nn];
+
+        // pointer to fields to assemble
+        double *gradQNN = stk::mesh::field_data(*dqdx_, nodeNN);
+        double volNN = *stk::mesh::field_data(*dualNodalVolume_, nodeNN);
+
+        // interpolate to scs point; operate on saved off ws_field
+        double qIp = 0.0;
+        const int offSet = ip*nodesPerFace;
+        for ( int ic = 0; ic < nodesPerFace; ++ic ) {
+          qIp += ws_shape_function[offSet+ic]*ws_scalar[ic];
+        }
+
+        // nearest node volume
+        double inv_volNN = 1.0/volNN;
+
+        // assemble to nearest node
+        for ( int j = 0; j < dimension; ++j ) {
+          double fac = qIp*ws_areav[ip*dimension+j];
+          gradQNN[j] += fac*inv_volNN;
+        }
+      }
+    }
+  }
+}
+//--------------------------------------------------------------------------
+void
 PromoteElementTest::dump_coords()
 {
   stk::mesh::BucketVector const& elem_buckets =
@@ -557,9 +760,10 @@ PromoteElementTest::dump_coords()
       stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(elem);
 
       std::cout << "Coords for elem " << bulkData_->identifier(elem) << ": ";
-      for (size_t node = 0; node < promoteElement_->nodes_per_element(); ++node) {
+      for (size_t node = 0; node < elem_->nodes1D; ++node) {
         double* coords = stk::mesh::field_data(*coordinates_, node_rels[node]);
         if (nDim_ == 2 ) {
+
           std::cout << "("<< coords[0] << "," << coords[1] << ")" << " ";
         }
         else {
@@ -640,14 +844,49 @@ PromoteElementTest::determine_mesh_spacing()
   return meshSpacing;
 }
 //--------------------------------------------------------------------------
-bool PromoteElementTest::check_dual_nodal_volume()
+bool
+PromoteElementTest::check_projected_nodal_gradient()
+{
+  // test assumes that the scalar q is constant
+  // will fail otherwise
+
+  bool testPassed = false;
+
+  double tol = 1.0e-8; //P=5 is off on this test base 6.07e-10
+
+  std::vector<double> zeroVec(nDim_,0.0);
+  std::vector<double> ws_dqdx(nDim_);
+
+  stk::mesh::Selector s_all_entities = metaData_->universal_part();
+  stk::mesh::BucketVector const& node_buckets =
+      bulkData_->get_buckets( stk::topology::NODE_RANK, s_all_entities );
+  for (const auto ib : node_buckets ) {
+    stk::mesh::Bucket & b = *ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    double* dqdx = stk::mesh::field_data(*dqdx_, b);
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      for (unsigned j = 0; j < nDim_; ++j) {
+        ws_dqdx[j] = dqdx[k*nDim_+j];
+      }
+
+      if (is_near(ws_dqdx, zeroVec, tol)) {
+        testPassed = true;
+      }
+      else {
+        return false;
+      }
+    }
+  }
+  return testPassed;
+}
+//--------------------------------------------------------------------------
+bool
+PromoteElementTest::check_dual_nodal_volume()
 {
   if (nDim_ == 2) {
     return check_dual_nodal_volume_quad();
   }
-  
-    return check_dual_nodal_volume_hex();
-  
+  return check_dual_nodal_volume_hex();
 }
 //--------------------------------------------------------------------------
 bool
@@ -657,10 +896,11 @@ PromoteElementTest::check_dual_nodal_volume_quad()
 
   auto scsEndLoc = elem_->quadrature->scsEndLoc();
   std::vector<double> exactDualNodalVolume(elem_->nodesPerElement);
-  for (unsigned i =0; i < elem_->nodes1D; ++i) {
+  for (unsigned i = 0; i < elem_->nodes1D; ++i) {
     for (unsigned j = 0; j < elem_->nodes1D; ++j) {
       exactDualNodalVolume[elem_->tensor_product_node_map(i,j)] =
-          0.25*(scsEndLoc[i+1]-scsEndLoc[i]) * (scsEndLoc[j+1]-scsEndLoc[j]) * meshSpacing * meshSpacing;
+          0.25*(scsEndLoc[i+1]-scsEndLoc[i]) * (scsEndLoc[j+1]-scsEndLoc[j])
+          * meshSpacing * meshSpacing;
     }
   }
 
@@ -768,7 +1008,7 @@ PromoteElementTest::check_dual_nodal_volume_hex()
   return true;
 }
 //--------------------------------------------------------------------------
-void 
+void
 PromoteElementTest::register_fields()
 {
   // extract blocks in the mesh with target names that are specified inline
@@ -792,10 +1032,10 @@ PromoteElementTest::register_fields()
   std::vector<std::string> promotedNames;
 
   // save space for parts of the input mesh
-  for ( size_t itarget = 0; itarget < targetNames.size(); ++itarget ) {
-    std::string promotedName = targetNames[itarget] + "_promoted";
-    
-    stk::mesh::Part* targetPart = metaData_->get_part(targetNames[itarget]);
+  for (auto& targetName : targetNames) {
+    std::string promotedName = targetName + "_promoted";
+
+    stk::mesh::Part* targetPart = metaData_->get_part(targetName);
     stk::mesh::Part* promotedPart = &metaData_->declare_part(promotedName);
 
     // extract the parts
@@ -813,22 +1053,32 @@ PromoteElementTest::register_fields()
     stk::mesh::put_field(*coordinates_,*targetPart, nDim_);
     stk::mesh::put_field(*coordinates_,*promotedPart, nDim_);
 
+    dqdx_ = &(metaData_->declare_field<VectorFieldType>(
+       stk::topology::NODE_RANK, "dqdx"));
+     stk::mesh::put_field(*dqdx_,*targetPart, nDim_);
+     stk::mesh::put_field(*dqdx_,*promotedPart, nDim_);
+
     // slightly helpful for checking dual nodal volume
     sharedElems_ = &(metaData_->declare_field<ScalarIntFieldType>(
-      stk::topology::NODE_RANK, "shared_elems"));
+      stk::topology::NODE_RANK, "elements_shared"));
     stk::mesh::put_field(*sharedElems_, *targetPart);
     stk::mesh::put_field(*sharedElems_, *promotedPart);
-  }
+
+    q_ = &(metaData_->
+        declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
+    stk::mesh::put_field(*q_, *targetPart);
+    stk::mesh::put_field(*q_, *promotedPart);
+   }
 }
 //--------------------------------------------------------------------------
 void
 PromoteElementTest::set_output_fields()
-{  
-  resultsFileIndex_ = ioBroker_->create_output_mesh(coarseOutputName_,
-    stk::io::WRITE_RESULTS );
+{
+  resultsFileIndex_ =
+      ioBroker_->create_output_mesh(coarseOutputName_, stk::io::WRITE_RESULTS );
+
   ioBroker_->add_field(resultsFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
 
-  std::vector<stk::mesh::FieldBase*> fields = { dualNodalVolume_ };
   promoteIO_ = make_unique<PromotedElementIO>(
     *promoteElement_,
     *metaData_,
@@ -837,12 +1087,14 @@ PromoteElementTest::set_output_fields()
     fineOutputName_
   );
 
-  promoteIO_->add_field(*dualNodalVolume_);
+  promoteIO_->add_fields({dualNodalVolume_, sharedElems_,q_,dqdx_});
 }
 //--------------------------------------------------------------------------
 void
 PromoteElementTest::initialize_fields()
 {
+  const double pi = std::acos(-1.0);
+
   stk::mesh::Selector s_all_entities = metaData_->universal_part();
   stk::mesh::BucketVector const& node_buckets =
       bulkData_->get_buckets( stk::topology::NODE_RANK, s_all_entities );
@@ -850,8 +1102,20 @@ PromoteElementTest::initialize_fields()
     stk::mesh::Bucket & b = *ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     double* dualNodalVolume = stk::mesh::field_data(*dualNodalVolume_, b);
+    double* q = stk::mesh::field_data(*q_, b);
+    double* dqdx = stk::mesh::field_data(*dqdx_, b);
+    double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       dualNodalVolume[k] = 0.0;
+      if (constScalarField_) {
+        q[k] = 1.0;
+      }
+      else {
+        q[k] = (std::cos(2.0*pi*coords[0+k*nDim_])+std::cos(2.0*pi*coords[1+k*nDim_]))*0.25;
+      }
+      for (unsigned j =0; j < nDim_; ++j) {
+        dqdx[j+k*nDim_] = 0.0;
+      }
     }
   }
 }
@@ -876,8 +1140,7 @@ bool PromoteElementTest::is_near(
   if (approx.size() == exact.size()) {
     for (unsigned j = 0; j < approx.size(); ++j) {
       if (std::abs(approx[j] - exact[j]) >= floatingPointTolerance_) {
-        is_near = false;
-        break;
+        return false;
       }
       else {
         is_near = true;
@@ -885,7 +1148,29 @@ bool PromoteElementTest::is_near(
     }
   }
   else {
-    is_near = false;
+    return false;
+  }
+  return is_near;
+}
+//--------------------------------------------------------------------------
+bool PromoteElementTest::is_near(
+  const std::vector<double>& approx,
+  const std::vector<double>& exact,
+  double tolerance)
+{
+  bool is_near = false;
+  if (approx.size() == exact.size()) {
+    for (unsigned j = 0; j < approx.size(); ++j) {
+      if (std::abs(approx[j] - exact[j]) >= tolerance) {
+        return false;
+      }
+      else {
+        is_near = true;
+      }
+    }
+  }
+  else {
+    return false;
   }
   return is_near;
 }

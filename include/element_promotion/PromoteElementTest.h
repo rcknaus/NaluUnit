@@ -7,19 +7,23 @@
 #ifndef PromoteElementTest_h
 #define PromoteElementTest_h
 
-#include <element_promotion/PromoteElement.h>
-#include <nalu_make_unique.h>
-
-// stk_mesh
-#include <stk_mesh/base/FieldBase.hpp>
+#include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
 
-// STL
-#include <vector>
-#include <map>
+#include <stddef.h>
 #include <memory>
-#include <array>
-#include <unordered_map>
+#include <ostream>
+#include <string>
+#include <vector>
+
+namespace sierra {
+namespace naluUnit {
+class HigherOrderEdge2DSCS;
+class HigherOrderQuad2DSCS;
+class PromoteElement;
+struct ElementDescription;
+}  // namespace naluUnit
+}  // namespace sierra
 
 // field types
 typedef stk::mesh::Field<double>  ScalarFieldType;
@@ -32,17 +36,21 @@ namespace stk {
     class StkMeshIoBroker;
   }
   namespace mesh {
-    class Part;
-    class MetaData;
     class BulkData;
+    class MetaData;
+    class Part;
     class Selector;
+
     typedef std::vector<Part*> PartVector;
-    struct Entity;
   }
 }
 
-namespace sierra { namespace naluUnit { class MasterElement; } }
-namespace sierra { namespace naluUnit { class PromotedElementIO; } }
+namespace sierra {
+namespace naluUnit {
+class MasterElement;
+class PromotedElementIO;
+}  // namespace naluUnit
+}  // namespace sierra
 
 namespace sierra {
 namespace naluUnit {
@@ -62,6 +70,7 @@ public:
   double timing_wall(double timeA, double timeB);
 
   void compute_dual_nodal_volume();
+  void compute_projected_nodal_gradient();
 
   size_t count_nodes(stk::mesh::Selector selector);
 
@@ -77,14 +86,28 @@ public:
 
   void dump_coords();
 
-  void compute_dual_nodal_volume_interior(MasterElement&& masterElement, stk::mesh::Selector selector);
+  void compute_dual_nodal_volume_interior(
+    MasterElement&& masterElement,
+    stk::mesh::Selector& selector);
+  void compute_projected_nodal_gradient_interior(
+    HigherOrderQuad2DSCS&& meSCS,
+    stk::mesh::Selector& selector);
+
+  void compute_projected_nodal_gradient_boundary(
+    HigherOrderEdge2DSCS&& meSCS,
+    stk::mesh::Selector& selector);
 
   bool check_node_count(unsigned polyOrder, unsigned originalNodeCount);
   bool is_near(double approx, double exact);
   bool is_near(const std::vector<double>& approx, const std::vector<double>& exact);
+  bool is_near(
+    const std::vector<double>& approx,
+    const std::vector<double>& exact,
+    double tolerance);
   bool check_interpolation();
   bool check_derivative();
   bool check_volume_quadrature();
+  bool check_projected_nodal_gradient();
   double poly_val(std::vector<double> coefs, double x);
   double poly_int(std::vector<double> coeffs,double xlower, double xupper);
   double poly_der(std::vector<double> coeffs, double x);
@@ -102,6 +125,10 @@ public:
   const std::string fineOutputName_;
   double floatingPointTolerance_;
 
+  // sets the scalar to 1. Otherwise, sets it equal to the
+  // values for the heat conduction MMS
+  bool constScalarField_;
+
   // meta, bulk, io, and promote element
   std::unique_ptr<stk::mesh::MetaData> metaData_;
   std::unique_ptr<stk::mesh::BulkData> bulkData_;
@@ -117,6 +144,8 @@ public:
   VectorFieldType* coordinates_;
   ScalarFieldType* dualNodalVolume_;
   ScalarIntFieldType* sharedElems_;
+  ScalarFieldType* q_;
+  VectorFieldType* dqdx_;
 
   // part vectors
   stk::mesh::PartVector originalPartVector_;

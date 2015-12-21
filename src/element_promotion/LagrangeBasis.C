@@ -4,22 +4,29 @@
 /*  in the file, LICENSE, which is located in the top-level Nalu          */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#include "../../include/element_promotion/LagrangeBasis.h"
+#include <element_promotion/LagrangeBasis.h>
 
-#include <iostream>
+#include <stk_util/environment/ReportHandler.hpp>
+
+#include <algorithm>
 #include <cmath>
-#include <limits>
+#include <memory>
+#include <string>
 
 namespace sierra{
 namespace naluUnit{
 
 LagrangeBasis::LagrangeBasis(
-  std::vector<std::vector<unsigned>>  indicesMap,
+  std::vector<std::vector<unsigned>>&  indicesMap,
   const std::vector<double>& nodeLocs)
-  :  indicesMap_(std::move(indicesMap)),
+  :  indicesMap_(indicesMap),
      numNodes1D_(nodeLocs.size()),
-     nodeLocs_(nodeLocs)
+     nodeLocs_(nodeLocs),
+     dimension_(indicesMap[0].size())
 {
+  for (unsigned j = 0; j < indicesMap.size(); ++j) {
+    ThrowRequire(indicesMap[j].size() == dimension_);
+  }
   set_lagrange_weights();
 }
 //--------------------------------------------------------------------------
@@ -39,43 +46,42 @@ LagrangeBasis::set_lagrange_weights()
 //--------------------------------------------------------------------------
 std::vector<double>
 LagrangeBasis::eval_basis_weights(
-  unsigned dimension,
-  const std::vector<double>& intgLoc)
+  const std::vector<double>& intgLoc) const
 {
-  auto numIps = intgLoc.size() / dimension;
-  auto numNodes = std::pow(numNodes1D_, dimension);
+  auto numIps = intgLoc.size() / dimension_;
+  auto numNodes = std::pow(numNodes1D_, dimension_);
   std::vector<double> interpolationWeights(numIps*numNodes);
 
   for (unsigned ip = 0; ip < numIps; ++ip) {
     unsigned scalar_ip_offset = ip*numNodes;
     for (unsigned nodeNumber = 0; nodeNumber < numNodes; ++nodeNumber) {
       unsigned scalar_offset = scalar_ip_offset+nodeNumber;
-      unsigned vector_offset = ip * dimension;
+      unsigned vector_offset = ip * dimension_;
       interpolationWeights[scalar_offset]
-          = tensor_lagrange_interpolant( dimension,
+          = tensor_lagrange_interpolant( dimension_,
                                         &intgLoc[vector_offset],
                                          indicesMap_[nodeNumber].data() );
     }
   }
+
+//  ThrowRequire(dimension_ == 2);
   return interpolationWeights;
 }
 //--------------------------------------------------------------------------
 std::vector<double>
-LagrangeBasis::eval_deriv_weights(
-  unsigned dimension,
-  const std::vector<double>& intgLoc)
+LagrangeBasis::eval_deriv_weights(const std::vector<double>& intgLoc) const
 {
-  auto numIps = intgLoc.size()/dimension;
-  auto numNodes = std::pow(numNodes1D_,dimension);
-  std::vector<double> derivWeights(numIps * numNodes * dimension);
+  auto numIps = intgLoc.size()/dimension_;
+  auto numNodes = std::pow(numNodes1D_,dimension_);
+  std::vector<double> derivWeights(numIps * numNodes * dimension_);
 
   unsigned derivIndex = 0;
   for (unsigned ip = 0; ip < numIps; ++ip) {
     for (unsigned nodeNumber = 0; nodeNumber < numNodes; ++nodeNumber) {
-      unsigned vector_offset = ip*dimension;
-      for (unsigned derivDirection = 0; derivDirection < dimension; ++derivDirection) {
+      unsigned vector_offset = ip*dimension_;
+      for (unsigned derivDirection = 0; derivDirection < dimension_; ++derivDirection) {
         derivWeights[derivIndex]
-            = tensor_lagrange_derivative( dimension,
+            = tensor_lagrange_derivative( dimension_,
                                          &intgLoc[vector_offset],
                                           indicesMap_[nodeNumber].data(),
                                           derivDirection );
@@ -87,7 +93,10 @@ LagrangeBasis::eval_deriv_weights(
 }
 //--------------------------------------------------------------------------
 double
-LagrangeBasis::tensor_lagrange_interpolant(unsigned dimension, const double* x, const unsigned* nodes)
+LagrangeBasis::tensor_lagrange_interpolant(
+  unsigned dimension,
+  const double* x,
+  const unsigned* nodes) const
 {
   double interpolant_weight = 1.0;
   for (unsigned j = 0; j < dimension; ++j) {
@@ -97,10 +106,11 @@ LagrangeBasis::tensor_lagrange_interpolant(unsigned dimension, const double* x, 
 }
 //--------------------------------------------------------------------------
 double
-LagrangeBasis::tensor_lagrange_derivative(unsigned dimension,
+LagrangeBasis::tensor_lagrange_derivative(
+  unsigned dimension,
   const double* x,
   const unsigned* nodes,
-  unsigned derivativeDirection)
+  unsigned derivativeDirection) const
 {
   double derivativeWeight = 1.0;
   for (unsigned j = 0; j < dimension; ++j) {
@@ -115,7 +125,7 @@ LagrangeBasis::tensor_lagrange_derivative(unsigned dimension,
 }
 //--------------------------------------------------------------------------
 double
-LagrangeBasis::lagrange_1D(double x, unsigned nodeNumber)
+LagrangeBasis::lagrange_1D(double x, unsigned nodeNumber) const
 {
   double numerator = 1.0;
   for (unsigned j = 0; j < numNodes1D_; ++j) {
@@ -127,7 +137,7 @@ LagrangeBasis::lagrange_1D(double x, unsigned nodeNumber)
 }
 //--------------------------------------------------------------------------
 double
-LagrangeBasis::lagrange_deriv_1D(double x, unsigned nodeNumber)
+LagrangeBasis::lagrange_deriv_1D(double x, unsigned nodeNumber) const
 {
   double outer = 0.0;
   for (unsigned j = 0; j < numNodes1D_; ++j) {

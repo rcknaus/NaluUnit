@@ -5,8 +5,8 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/TensorProductQuadratureRule.h>
-#include <iostream>
 #include <cmath>
+#include <stdexcept>
 
 namespace sierra{
 namespace naluUnit{

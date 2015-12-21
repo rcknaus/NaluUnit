@@ -6,26 +6,16 @@
 /*------------------------------------------------------------------------*/
 
 
-#include <mpi.h>
-
 // nalu
 #include <NaluEnv.h>
+#include <element_promotion/PromoteElementTest.h>
+#include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
-#include <element_promotion/PromoteElementTest.h>
-
-// util
-#include <stk_util/environment/CPUTime.hpp>
-#include <stk_util/environment/perf_util.hpp>
-
-// boost for input params
-#include <boost/program_options.hpp>
-
 #include <iostream>
-#include <fstream>
-#include <iomanip>
 #include <stdexcept>
-
+#include <string>
+#include <boost/program_options.hpp>
 
 int main( int argc, char ** argv )
 {
@@ -37,10 +27,10 @@ int main( int argc, char ** argv )
 
   // NaluEnv singleton
   sierra::naluUnit::NaluEnv &naluEnv = sierra::naluUnit::NaluEnv::self();
-  
+
   // command line options.
   std::string inputFileName, logFileName;
- 
+
   boost::program_options::options_description desc("Nalu Supported Options");
   desc.add_options()
     ("help,h","Help message")
@@ -72,10 +62,10 @@ int main( int argc, char ** argv )
   }
 
   // deal with log file stream
-  naluEnv.set_log_file_stream(logFileName);  
-  
+  naluEnv.set_log_file_stream(logFileName);
+
   naluEnv.naluOutputP0() << "NaluUnit Shall Commence" << std::endl;
- 
+
   //==============================
   // create; execute; delete
   //==============================
@@ -96,27 +86,43 @@ int main( int argc, char ** argv )
     delete surfaceFields;
   }
 
+  //std::string quadMesh = "test_meshes/1x1_tquad4_R0.g";
+  std::string quadMesh = "test_meshes/quad4_64.g";
   const bool doPromotionQuad9 = true;
   if ( doPromotionQuad9 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad9", "test_meshes/quad4_64.g");
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad9", quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
   const bool doPromotionQuad16 = true;
   if ( doPromotionQuad16 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad16", "test_meshes/quad4_64.g");
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad16", quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
-  const bool doPromotionHex27 = false;
+  const bool doPromotionQuad25 = true;
+  if ( doPromotionQuad25 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad25", quadMesh);
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionQuad36 = true;
+  if ( doPromotionQuad36 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad36", quadMesh);
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionHex27 = true;
   if ( doPromotionHex27 ) {
     auto promoteTest = new sierra::naluUnit::PromoteElementTest("Hex27", "test_meshes/hex8_32.g");
     promoteTest->execute();
     delete promoteTest;
   }
 
-  // all done  
+  // all done
   return 0;
 }

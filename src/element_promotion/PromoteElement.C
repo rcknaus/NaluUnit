@@ -5,32 +5,32 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/PromoteElement.h>
+
 #include <NaluEnv.h>
 #include <element_promotion/ElementDescription.h>
-#include <nalu_make_unique.h>
 
-// stk_mesh/base/fem
-#include <stk_mesh/base/MetaData.hpp>
 #include <stk_mesh/base/Field.hpp>
-#include <stk_mesh/base/FieldParallel.hpp>
-#include <stk_mesh/base/GetBuckets.hpp>
-#include <stk_mesh/base/FEMHelpers.hpp>  // for declare_element
-#include <stk_mesh/base/Part.hpp>
+#include <stk_mesh/base/MetaData.hpp>
 #include <stk_mesh/base/Selector.hpp>
-
-// stk_io
-#include <stk_io/StkMeshIoBroker.hpp>
-
-// stk_util
-#include <stk_util/parallel/ParallelReduce.hpp>
-#include <stk_util/parallel/Parallel.hpp>
 #include <stk_util/parallel/CommSparse.hpp>
+#include <stk_mesh/base/Bucket.hpp>
+#include <stk_mesh/base/BulkData.hpp>
+#include <stk_mesh/base/BulkDataInlinedMethods.hpp>
+#include <stk_mesh/base/FieldBase.hpp>
+#include <stk_topology/topology.hpp>
+#include <stk_topology/topology.tcc>
+#include <stk_util/environment/ReportHandler.hpp>
+#include <stk_util/parallel/ParallelComm.hpp>
+
+#include <algorithm>
 #include <array>
-#include <unordered_set>
-
-
-// promoted element implementations
-#include <element_promotion/MasterElement.h>
+#include <cmath>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <ext/alloc_traits.h>
 
 namespace sierra{
 namespace naluUnit{
@@ -74,6 +74,19 @@ PromoteElement::begin_nodes_all(const stk::mesh::Entity& elem) const
 }
 //--------------------------------------------------------------------------
 stk::mesh::Entity const*
+PromoteElement::begin_side_nodes_all(const stk::mesh::Bucket& bucket,
+  stk::mesh::EntityId id) const
+{
+  return (elemNodeMapBC_.at(bucket[id]).data());
+}
+//--------------------------------------------------------------------------
+stk::mesh::Entity const*
+PromoteElement::begin_side_nodes_all(const stk::mesh::Entity& elem) const
+{
+  return (elemNodeMapBC_.at(elem).data());
+}
+//--------------------------------------------------------------------------
+stk::mesh::Entity const*
 PromoteElement::begin_elems_all(const stk::mesh::Bucket& bucket,
   stk::mesh::EntityId id) const
 {
@@ -84,6 +97,19 @@ stk::mesh::Entity const*
 PromoteElement::begin_elems_all(const stk::mesh::Entity& elem) const
 {
   return (nodeElemMap_.at(elem).data());
+}
+//--------------------------------------------------------------------------
+stk::mesh::Entity const*
+PromoteElement::begin_side_elems_all(const stk::mesh::Bucket& bucket,
+  stk::mesh::EntityId id) const
+{
+  return (nodeElemMapBC_.at(bucket[id]).data());
+}
+//--------------------------------------------------------------------------
+stk::mesh::Entity const*
+PromoteElement::begin_side_elems_all(const stk::mesh::Entity& elem) const
+{
+  return (nodeElemMapBC_.at(elem).data());
 }
 //--------------------------------------------------------------------------
 void PromoteElement::promote_elements(const stk::mesh::PartVector& baseParts,
@@ -281,7 +307,7 @@ void PromoteElement::populate_elem_node_relations(
     stk::topology::NODE_RANK, selector);
 
   elemNodeMap_.reserve(count_entities(elem_buckets));
-  nodeElemMap_.reserve(requests.size());
+  nodeElemMap_.reserve(count_requested_nodes(requests));
 
   // initialize base downward relationships
   for (const auto* ib : elem_buckets) {
@@ -315,7 +341,7 @@ void PromoteElement::populate_elem_node_relations(
 
   //FIXME(rcknaus): clean-up the ordinal reversing logic
 
-  // For P=2, we have to worry about whether an edge is ordered forward or backward
+  // For P>2, we have to worry about whether an edge is ordered forward or backward
   // The locations map expects things to be ordered, so we keep them sorted
   // and the node locations are reversed in elemNodeMap.
   for (const auto& request : requests) {
@@ -333,14 +359,58 @@ void PromoteElement::populate_elem_node_relations(
         }
       }
       else {
+        const auto& ordinals = request.childOrdinalsForElem_[elemNumber];
         for (unsigned j = 0; j < request.num_children(); ++j) {
-          const auto& ordinals = request.childOrdinalsForElem_[elemNumber];
           elemNodeMap_.at(sharedElem)[ordinals[j]] = request.children_[j];
         }
       }
     }
     for (const auto child : request.children_) {
       nodeElemMap_.insert({ child, request.sharedElems_ });
+    }
+  }
+
+  // Boundaries
+  if (dimension_ == 2) { // not implemeneted for 3D yet
+    auto topo = (dimension_ == 2) ? stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
+    const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
+      topo, selector);
+
+    elemNodeMapBC_.reserve(count_entities(boundary_buckets));
+    nodeElemMapBC_.reserve(
+      count_entities(boundary_buckets)*elemDescription_.nodes1D
+    );
+
+    unsigned nodes1D = elemDescription_.nodes1D;
+    std::vector<stk::mesh::Entity> faceNodes(nodes1D);
+    for (const auto* ib : boundary_buckets) {
+      const stk::mesh::Bucket& b = *ib;
+      const stk::mesh::Bucket::size_type length = b.size();
+
+      for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
+        const auto face = b[k];
+
+        const auto* parent_elems = mesh.begin_elements(face);
+        ThrowAssert(mesh.num_elements(face) == 1);
+
+        const auto* face_elem_ords = mesh.begin_element_ordinals(face);
+        const unsigned face_ordinal = face_elem_ords[0];
+
+        const auto elem_node_rels = elemNodeMap_.at(parent_elems[0]);
+
+        const auto nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
+
+        for (unsigned j = 0; j < nodes1D; ++j) {
+          //auto& ordinal = elemDescription_.inverseNodeMap1D.at(j);
+          auto ordinal = elemDescription_.tensor_product_node_map(j);
+          faceNodes[ordinal] = elem_node_rels.at(nodeOrdinalsForFace.at(j));
+        }
+        elemNodeMapBC_[face]= faceNodes;
+
+        for (unsigned j = 0; j < elemDescription_.nodes1D; ++j) {
+          nodeElemMapBC_.insert({faceNodes[j], {face}});
+        }
+      }
     }
   }
   ThrowAssert(check_elem_node_relations(mesh));
@@ -469,7 +539,7 @@ PromoteElement::interpolate_coords(
   static_assert ( embedding_dimension == 2 || embedding_dimension == 3, "");
   static_assert ( dimension <= embedding_dimension, "");
 
-  constexpr static unsigned num_shape = ipow(2,dimension);
+  constexpr unsigned num_shape = ipow(2,dimension);
   std::array<double, num_shape> shape_function;
 
   auto shape1D = [](double x, double xi) { return 0.5*(1.0+xi*x); };
@@ -584,7 +654,7 @@ PromoteElement::ChildNodeRequest::set_node_entity_for_request(
     children_[j] = mesh.declare_entity(
       stk::topology::NODE_RANK, get_id_for_child(j), node_parts
     );
-    for (size_t i = 0; i < idProcPairsFromAllProcs_[j].size(); ++i) {
+    for (unsigned i = 0; i < idProcPairsFromAllProcs_[j].size(); ++i) {
         if (idProcPairsFromAllProcs_[j][i].first != mesh.parallel_rank()) {
         mesh.add_node_sharing(
           children_[j], idProcPairsFromAllProcs_[j][i].first
@@ -664,7 +734,7 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
   stk::mesh::Entity const* node_rels = mesh.begin_nodes(elem);
   const size_t numNodes = mesh.num_nodes(elem);
 
-  std::array<unsigned,8> parent_node_ordinals;
+  std::array<unsigned, 8> parent_node_ordinals;
   unsigned numParents = parentIds_.size();
   ThrowAssert(numParents <= 8);
 
@@ -687,6 +757,7 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
 
       if (isEqual) {
         childOrdinalsForElem_[elemNumber] = relation.first;
+        break;
       }
       else {
         bool isPermutation = std::is_permutation(
@@ -698,6 +769,7 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
         if (isPermutation) {
           ordinalsAreReversed = true;
           childOrdinalsForElem_[elemNumber] = relation.first;
+          break;
         }
       }
     }

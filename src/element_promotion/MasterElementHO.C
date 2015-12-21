@@ -5,10 +5,15 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/MasterElementHO.h>
+#include <element_promotion/ElementDescription.h>
+#include <element_promotion/LagrangeBasis.h>
+#include <element_promotion/MasterElement.h>
+
+#include <ext/alloc_traits.h>
+#include <array>
 #include <cmath>
-#include <iostream>
-#include <limits>
-#include <stk_topology/topology.hpp>
+#include <memory>
+#include <stdexcept>
 
 namespace sierra{
 namespace naluUnit{
@@ -24,8 +29,8 @@ HigherOrderQuad2DSCV::HigherOrderQuad2DSCV(const ElementDescription& elem)
   set_interior_info();
 
   // compute and save shape functions and derivatives at ips
-  shapeFunctions_ = elem_.eval_basis_weights(nDim_, intgLoc_);
-  shapeDerivs_ = elem_.eval_deriv_weights(nDim_, intgLoc_);
+  shapeFunctions_ = elem_.eval_basis_weights(intgLoc_);
+  shapeDerivs_ = elem_.eval_deriv_weights(intgLoc_);
 }
 //--------------------------------------------------------------------------
 void
@@ -57,6 +62,15 @@ HigherOrderQuad2DSCV::set_interior_info()
         }
       }
     }
+  }
+}
+//--------------------------------------------------------------------------
+void
+HigherOrderQuad2DSCV::shape_fcn(double *shpfc)
+{
+  int numShape = shapeFunctions_.size();
+  for (int j = 0; j < numShape; ++j) {
+    shpfc[j] = shapeFunctions_[j];
   }
 }
 //--------------------------------------------------------------------------
@@ -127,6 +141,8 @@ HigherOrderQuad2DSCS::HigherOrderQuad2DSCS(const ElementDescription& elem)
   : MasterElement(),
     elem_(elem)
 {
+  nDim_ = 2;
+  nodesPerElement_ = elem_.nodesPerElement;
   // set up integration rule and relevant maps for scs
   set_interior_info();
 
@@ -134,35 +150,30 @@ HigherOrderQuad2DSCS::HigherOrderQuad2DSCS(const ElementDescription& elem)
   set_boundary_info();
 
   // compute and save shape functions and derivatives at ips
-  shapeFunctions_ = elem_.eval_basis_weights(nDim_, intgLoc_);
-  shapeDerivs_ = elem_.eval_deriv_weights(nDim_, intgLoc_);
-  expFaceShapeDerivs_ = elem_.eval_deriv_weights(nDim_, intgExpFace_);
+  shapeFunctions_ = elem_.eval_basis_weights(intgLoc_);
+  shapeDerivs_ = elem_.eval_deriv_weights(intgLoc_);
+  expFaceShapeDerivs_ = elem_.eval_deriv_weights(intgExpFace_);
 }
 //--------------------------------------------------------------------------
 void
 HigherOrderQuad2DSCS::set_interior_info()
 {
-  const int linesPerDirection = elem_.nodes1D - 1; // 2
+  const int linesPerDirection = elem_.nodes1D - 1;
   const int ipsPerLine = elem_.numQuad * elem_.nodes1D;
   const int numLines = linesPerDirection * nDim_;
 
-  numIntPoints_ = numLines * ipsPerLine; // 24
+  numIntPoints_ = numLines * ipsPerLine;
 
   // define L/R mappings
-  lrscv_.resize(2*numIntPoints_); // size = 48
+  lrscv_.resize(2*numIntPoints_);
 
   // standard integration location
-  intgLoc_.resize(numIntPoints_*nDim_); // size = 48
+  intgLoc_.resize(numIntPoints_*nDim_);
 
   // shifted
   intgLocShift_.resize(numIntPoints_*nDim_);
 
   ipInfo_.resize(numIntPoints_);
-
-  // a list of the scs locations in 1D
-
-  // correct orientation for area vector
-  const std::vector<double> orientation = { -1.0, +1.0 };
 
   // specify integration point locations in a dimension-by-dimension manner
 
@@ -192,7 +203,7 @@ HigherOrderQuad2DSCS::set_interior_info()
         intgLoc_[vector_index + 1] = elem_.scsLoc[m];
 
         //compute the quadrature weight
-        ipInfo_[scalar_index].weight = orientation[m]*elem_.tensor_product_weight(l,j);
+        ipInfo_[scalar_index].weight = std::pow(-1.0, m+1)*elem_.tensor_product_weight(l,j);
 
         //direction
         ipInfo_[scalar_index].direction = Jacobian::T_DIRECTION;
@@ -227,7 +238,7 @@ HigherOrderQuad2DSCS::set_interior_info()
         intgLoc_[vector_index+1] = elem_.gauss_point_location(l,j);
 
         //compute the quadrature weight
-        ipInfo_[scalar_index].weight = -orientation[m]*elem_.tensor_product_weight(l,j);
+        ipInfo_[scalar_index].weight = std::pow(-1.0, m)*elem_.tensor_product_weight(l,j);
 
         //direction
         ipInfo_[scalar_index].direction = Jacobian::S_DIRECTION;
@@ -247,23 +258,16 @@ HigherOrderQuad2DSCS::set_boundary_info()
   const int nodesPerFace = elem_.nodes1D;
   ipsPerFace_ = nodesPerFace*elem_.numQuad;
 
-  const int numFaceIps = numFaces*ipsPerFace_; // 24 -- different from numIntPoints_ for p > 2 ?
+  const int numFaceIps = numFaces*ipsPerFace_;
 
   oppFace_.resize(numFaceIps);
   ipNodeMap_.resize(numFaceIps);
   oppNode_.resize(numFaceIps);
   intgExpFace_.resize(numFaceIps*nDim_);
 
-  const std::vector<int> stkFaceNodeMap = {
-                                            0, 4, 1, //face 0, bottom face
-                                            1, 5, 2, //face 1, right face
-                                            2, 6, 3, //face 2, top face  -- reversed order
-                                            3, 7, 0  //face 3, left face -- reversed order
-                                          };
-
-  auto face_node_number = [=] (int number,int faceOrdinal)
+  auto face_node_number = [&] (int number,int faceOrdinal)
   {
-    return stkFaceNodeMap[number+elem_.nodes1D*faceOrdinal];
+    return elem_.faceNodeMap[faceOrdinal][number];
   };
 
   const std::vector<int> faceToLine = { 0, 3, 1, 2 };
@@ -350,6 +354,15 @@ HigherOrderQuad2DSCS::set_boundary_info()
       vector_index += nDim_;
       ++oppFaceIndex;
     }
+  }
+}
+//--------------------------------------------------------------------------
+void
+HigherOrderQuad2DSCS::shape_fcn(double *shpfc)
+{
+  int numShape = shapeFunctions_.size();
+  for (int j =0; j < numShape; ++j) {
+    shpfc[j] = shapeFunctions_[j];
   }
 }
 //--------------------------------------------------------------------------
@@ -464,8 +477,6 @@ HigherOrderQuad2DSCS::face_grad_op(
   }
 }
 //--------------------------------------------------------------------------
-//-------- gradient --------------------------------------------------------
-//--------------------------------------------------------------------------
 void
 HigherOrderQuad2DSCS::gradient(
   const double* elemNodalCoords,
@@ -573,16 +584,12 @@ HigherOrderEdge2DSCS::HigherOrderEdge2DSCS(const ElementDescription& elem)
 : MasterElement(),
   elem_(elem)
 {
+  nDim_ = 2;
   nodesPerElement_ = elem_.nodes1D;
   numIntPoints_ = elem_.numQuad * elem_.nodes1D;
 
   ipNodeMap_.resize(numIntPoints_);
   intgLoc_.resize(numIntPoints_);
-
-  intgLocShift_.resize(6);
-  intgLocShift_[0] = -1.00; intgLocShift_[1]  = -1.00;
-  intgLocShift_[2] =  0.00; intgLocShift_[3]  =  0.00;
-  intgLocShift_[4] =  1.00; intgLocShift_[5]  =  1.00;
 
   ipWeight_.resize(numIntPoints_);
 
@@ -595,6 +602,9 @@ HigherOrderEdge2DSCS::HigherOrderEdge2DSCS(const ElementDescription& elem)
       ++scalar_index;
     }
   }
+
+  shapeFunctions_ = elem_.basisBoundary->eval_basis_weights(intgLoc_);
+  shapeDerivs_ = elem_.basisBoundary->eval_deriv_weights(intgLoc_);
 }
 //--------------------------------------------------------------------------
 const int *
@@ -617,10 +627,11 @@ HigherOrderEdge2DSCS::determinant(
 
     for (int ip = 0; ip < numIntPoints_; ++ip) {
       const int offset = nDim_ * ip + coord_elem_offset;
+      const int grad_offset = ip * nodesPerElement_; // times edgeDim = 1
 
       // calculate the area vector
       area_vector( &coords[coord_elem_offset],
-                   intgLoc_[ip],
+                   &shapeDerivs_[grad_offset],
                    areaVector.data() );
 
       // weight the area vector with the Gauss-quadrature weight for this IP
@@ -636,39 +647,29 @@ HigherOrderEdge2DSCS::determinant(
 void
 HigherOrderEdge2DSCS::shape_fcn(double *shpfc)
 {
-  for ( int i =0; i< numIntPoints_; ++i ) {
-    int j = 3*i;
-    const double s = intgLoc_[i];
-    shpfc[j  ] = -s*(1.0-s)*0.5;
-    shpfc[j+1] = s*(1.0+s)*0.5;
-    shpfc[j+2] = (1.0-s)*(1.0+s);
-  }
+  int numShape = shapeFunctions_.size();
+   for (int j =0; j < numShape; ++j) {
+     shpfc[j] = shapeFunctions_[j];
+   }
 }
 //--------------------------------------------------------------------------
 void
 HigherOrderEdge2DSCS::area_vector(
-  const double *coords,
-  const double s,
-  double *areaVector) const
+  const double* elemNodalCoords,
+  const double* shapeDeriv,
+  double* normalVec) const
 {
-  // returns the normal area vector (dyds,-dxds) evaluated at s
+  double dxdr = 0.0;  double dydr = 0.0;
+  for (int node = 0; node < nodesPerElement_; ++node) {
+    const int vector_offset = nDim_ * node;
+    const double xCoord = elemNodalCoords[vector_offset+0];
+    const double yCoord = elemNodalCoords[vector_offset+1];
 
-  // create a parameterization of the curve
-  // r(s) = (x(s),y(s)) s.t. r(-1) = (x0,y0); r(0) = (x2,y2); r(1) = (x1,y1);
-  // x(s) = x2 + 0.5 (x1-x0) s + 0.5 (x1 - 2 x2 + x0) s^2,
-  // y(s) = y2 + 0.5 (y1-y0) s + 0.5 (y1 - 2 y2 + y0) s^2
-  // could equivalently use the shape function derivatives . . .
-
-  // coordinate names
-  const double x0 = coords[0]; const double y0 = coords[1];
-  const double x1 = coords[2]; const double y1 = coords[3];
-  const double x2 = coords[4]; const double y2 = coords[5];
-
-  const double dxds = 0.5 * (x1 - x0) + (x1 - 2.0 * x2 + x0) * s;
-  const double dyds = 0.5 * (y1 - y0) + (y1 - 2.0 * y2 + y0) * s;
-
-  areaVector[0] =  dyds;
-  areaVector[1] = -dxds;
+    dxdr += shapeDeriv[node] * xCoord;
+    dydr += shapeDeriv[node] * yCoord;
+  }
+  normalVec[0] =  dydr;
+  normalVec[1] = -dxdr;
 }
 
 }  // namespace naluUnit

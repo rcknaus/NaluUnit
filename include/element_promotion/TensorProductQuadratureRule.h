@@ -7,9 +7,8 @@
 #ifndef TensorProductQuadratureRule_h
 #define TensorProductQuadratureRule_h
 
+#include <string>
 #include <vector>
-#include <cstdlib>
-#include <stdexcept>
 
 namespace sierra{
 namespace naluUnit{

@@ -9,13 +9,9 @@
 #ifndef MasterElement_h
 #define MasterElement_h
 
-#include <vector>
 #include <cstdlib>
 #include <stdexcept>
-
-namespace stk {
-struct topology;
-}
+#include <vector>
 
 namespace sierra{
 namespace naluUnit{
@@ -364,123 +360,6 @@ private:
 
   std::vector<double> ipWeight_;
   const int surfaceDimension_;
-};
-
-class QuadrilateralP2Element : public MasterElement
-{
-public:
-  QuadrilateralP2Element();
-  virtual ~QuadrilateralP2Element() {}
-
-  void shape_fcn(double *shpfc);
-  void shifted_shape_fcn(double *shpfc)  { throw std::runtime_error("shifted shape functions not implemented"); };
-  std::vector<double> shapeFunctions_;
-
-protected:
-  struct ContourData {
-    Jacobian::Direction direction;
-    double weight;
-  };
-
-  int tensor_product_node_map(int i, int j) const;
-
-  double gauss_point_location(
-    int nodeOrdinal,
-    int gaussPointOrdinal) const;
-
-  double tensor_product_weight(
-    int s1Node, int s2Node,
-    int s1Ip, int s2Ip) const;
-
-  double tensor_product_weight(int s1Node, int s1Ip) const;
-
-  void eval_shape_functions_at_ips();
-  void eval_shape_derivs_at_ips();
-  void eval_shape_derivs_at_face_ips();
-
-  const double scsDist_;
-  const bool useGLLGLL_;
-  const int nodes1D_;
-  const int numQuad_;
-
-  //quadrature info
-  std::vector<double> gaussAbscissae_;
-  std::vector<double> gaussWeight_;
-
-  std::vector<int> stkNodeMap_;
-  std::vector<double> scsEndLoc_;
-
-
-  std::vector<double> shapeDerivs_;
-  std::vector<double> expFaceShapeDerivs_;
-
-private:
-  void quad9_shape_fcn(
-    int numIntPoints,
-    const double *intgLoc,
-    double* shpfc
-  ) const;
-
-  void quad9_shape_deriv(
-    int numIntPoints,
-    const double *intgLoc,
-    double* deriv
-  ) const;
-};
-
-// 3D Quad 27 subcontrol volume
-class Quad92DSCV : public QuadrilateralP2Element
-{
-public:
-  Quad92DSCV();
-  virtual ~Quad92DSCV() {}
-
-  const int * ipNodeMap(int ordinal = 0);
-
-  void determinant(
-    const int nelem,
-    const double *coords,
-    double *volume,
-    double * error );
-  std::vector<double> ipWeight_;
-private:
-  void set_interior_info();
-
-  double jacobian_determinant(
-    const double *elemNodalCoords,
-    const double *shapeDerivs ) const;
-
-
-};
-
-// edge 2d
-class Edge32DSCS : public QuadrilateralP2Element
-{
-public:
-  Edge32DSCS();
-  virtual ~Edge32DSCS() {}
-
-  const int * ipNodeMap(int ordinal = 0);
-
-  void determinant(
-    const int nelem,
-    const double *coords,
-    double *areav,
-    double * error );
-
-  void shape_fcn(
-    double *shpfc);
-
-  void shifted_shape_fcn(
-    double *shpfc);
-
-private:
-  void area_vector(
-    const double *coords,
-    const double s,
-    double *areaVector) const;
-
-  std::vector<double> ipWeight_;
 };
 
 } // namespace nalu

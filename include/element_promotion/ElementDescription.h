@@ -1,18 +1,14 @@
 #ifndef ElementDescription_h
 #define ElementDescription_h
 
-#include <element_promotion/TensorProductQuadratureRule.h>
 #include <element_promotion/LagrangeBasis.h>
-#include <stk_mesh/base/FieldBase.hpp>
-#include <stk_mesh/base/CoordinateSystems.hpp>
+#include <element_promotion/TensorProductQuadratureRule.h>
 
-// STL
-#include <vector>
+#include <stddef.h>
 #include <map>
-#include <unordered_map>
 #include <memory>
-#include <array>
 #include <string>
+#include <vector>
 
 namespace sierra {
 namespace naluUnit {
@@ -25,7 +21,7 @@ struct ElementDescription
 {
 public:
   static std::unique_ptr<ElementDescription> create(std::string type);
-  virtual ~ElementDescription() {};
+  virtual ~ElementDescription() = default;
 
   inline int tensor_product_node_map(int i, int j, int k) const
   {
@@ -62,15 +58,15 @@ public:
   }
 
   inline std::vector<double>
-  eval_basis_weights(unsigned dimension, std::vector<double>& intgLoc) const
+  eval_basis_weights(const std::vector<double>& intgLoc) const
   {
-     return basis->eval_basis_weights(dimension, intgLoc);
+     return basis->eval_basis_weights(intgLoc);
   }
 
   inline std::vector<double>
-  eval_deriv_weights(unsigned dimension, std::vector<double>& intgLoc) const
+  eval_deriv_weights(const std::vector<double>& intgLoc) const
   {
-    return basis->eval_deriv_weights(dimension, intgLoc);
+    return basis->eval_deriv_weights(intgLoc);
   }
 
   size_t dimension;
@@ -86,21 +82,35 @@ public:
   bool useGLLGLL;
   unsigned polyOrder;
   unsigned numQuad;
-  std::unique_ptr<TensorProductQuadratureRule> quadrature; // change to unique
+  std::unique_ptr<TensorProductQuadratureRule> quadrature;
   std::unique_ptr<LagrangeBasis> basis;
+  std::unique_ptr<LagrangeBasis> basisBoundary;
   std::vector<unsigned> nodeMap;
   std::vector<unsigned> nodeMap1D;
   std::vector<double> scsLoc;
   std::vector<double> nodeLocs;
   std::vector<std::vector<unsigned>> inverseNodeMap;
-  std::map<unsigned,unsigned> inverseNodeMap1D;
+  std::vector<std::vector<unsigned>> inverseNodeMap1D;
+  std::vector<std::vector<size_t>> faceNodeMap;
 protected:
   ElementDescription() = default;
 };
 
-struct Quad9ElementDescription: public ElementDescription
+struct QuadMElementDescription: public ElementDescription
 {
-  Quad9ElementDescription();
+  QuadMElementDescription(const std::vector<double> in_nodeLocs, const std::vector<double>& in_scsLoc);
+
+private:
+  void set_node_maps(unsigned in_nodes1D);
+  void set_node_connectivity(unsigned in_nodes1D);
+
+  void set_node_locations(
+    const AddedConnectivityOrdinalMap& in_edgeNodeConnectivities,
+    const AddedConnectivityOrdinalMap& in_faceNodeConnectivities,
+    const std::vector<double>& in_nodeLocs
+  );
+
+  void set_subelement_connectivity(unsigned in_nodes1D);
 };
 
 struct Quad16ElementDescription: public ElementDescription

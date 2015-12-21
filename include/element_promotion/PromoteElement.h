@@ -8,27 +8,43 @@
 #define PromoteElement_h
 
 #include <element_promotion/ElementDescription.h>
-#include <nalu_make_unique.h>
-
-// stk_mesh
-#include <stk_mesh/base/FieldBase.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
-#include <boost/functional/hash.hpp>
 
-// STL
-#include <vector>
-#include <map>
-#include <memory>
+#include <stk_mesh/base/Entity.hpp>
+#include <stk_mesh/base/Field.hpp>
+#include <stk_mesh/base/Selector.hpp>
+#include <stk_mesh/base/Types.hpp>
+
+#include <boost/functional/hash/hash.hpp>
+
 #include <array>
+#include <cstddef>
+#include <iosfwd>
 #include <unordered_map>
 #include <unordered_set>
-#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace stk {
+namespace mesh {
+class Bucket;
+class BulkData;
+class MetaData;
+}  // namespace mesh
+}  // namespace stk
 
 // field types
 typedef stk::mesh::Field<double, stk::mesh::Cartesian>  VectorFieldType;
 
 namespace sierra {
 namespace naluUnit {
+
+    template<class T>
+    constexpr T ipow(const T base, unsigned const exponent)
+    {
+      return (exponent == 0) ? 1 : (base * ipow(base, exponent-1));
+    }
+
 
 class PromoteElement
 {
@@ -57,8 +73,13 @@ public:
 
   stk::mesh::Entity const* begin_nodes_all(const stk::mesh::Bucket& bucket, stk::mesh::EntityId id) const;
   stk::mesh::Entity const* begin_nodes_all(const stk::mesh::Entity& elem) const;
+  stk::mesh::Entity const* begin_side_nodes_all(const stk::mesh::Bucket& bucket, stk::mesh::EntityId id) const;
+  stk::mesh::Entity const* begin_side_nodes_all(const stk::mesh::Entity& face) const;
   stk::mesh::Entity const* begin_elems_all(const stk::mesh::Bucket& bucket, stk::mesh::EntityId id) const;
   stk::mesh::Entity const* begin_elems_all(const stk::mesh::Entity& node) const;
+  stk::mesh::Entity const* begin_side_elems_all(const stk::mesh::Bucket& bucket, stk::mesh::EntityId id) const;
+  stk::mesh::Entity const* begin_side_elems_all(const stk::mesh::Entity& face) const;
+
   size_t num_elems(const stk::mesh::Entity& node) const;
   size_t num_nodes(const stk::mesh::Entity& elem) const;
 private:
@@ -135,13 +156,6 @@ private:
 
   bool check_elem_node_relations(const stk::mesh::BulkData& mesh) const;
 
-  template<class T>
-  static constexpr T ipow(const T base, unsigned const exponent)
-  {
-    return (exponent == 0) ? 1 : (base * ipow(base, exponent-1));
-  }
-
-
   template<unsigned embedding_dimension, unsigned dimension>
   void interpolate_coords(
     const double* par_coord,
@@ -204,6 +218,9 @@ private:
 
   ElemRelationsMap elemNodeMap_;
   ElemRelationsMap nodeElemMap_;
+
+  ElemRelationsMap elemNodeMapBC_;
+  ElemRelationsMap nodeElemMapBC_;
   std::vector<stk::mesh::Entity> elemNodes_;
 };
 

@@ -1,19 +1,32 @@
 #ifndef PromotedElementIO_h
 #define PromotedElementIO_h
 
-#include <element_promotion/PromoteElement.h>
-#include <Ioss_SubSystem.h>
-
-// stk_mesh
-#include <stk_mesh/base/FieldBase.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
+#include <stk_mesh/base/FieldBase.hpp>
+#include <Ioss_Region.h>
+#include <stk_mesh/base/Field.hpp>
+#include <stk_mesh/base/Types.hpp>
 
-// STL
-#include <vector>
+#include <stddef.h>
+#include <iosfwd>
 #include <map>
 #include <memory>
-#include <array>
-#include <unordered_map>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+namespace Ioss {
+class DatabaseIO;
+class ElementBlock;
+class NodeBlock;
+class SideBlock;
+}  // namespace Ioss
+namespace sierra {
+namespace naluUnit {
+class PromoteElement;
+struct ElementDescription;
+}  // namespace naluUnit
+}  // namespace sierra
 
 // field types
 typedef stk::mesh::Field<double>  ScalarFieldType;
@@ -21,20 +34,14 @@ typedef stk::mesh::Field<double, stk::mesh::SimpleArrayTag>  GenericFieldType;
 typedef stk::mesh::Field<double, stk::mesh::Cartesian>  VectorFieldType;
 
 namespace stk {
-  namespace io {
-    class StkMeshIoBroker;
-  }
   namespace mesh {
-    class Part;
-    class MetaData;
     class BulkData;
-    class Selector;
+    class MetaData;
+    class Part;
+
     typedef std::vector<Part*> PartVector;
-    struct Entity;
   }
 }
-
-namespace sierra { namespace naluUnit { class MasterElement; } }
 
 namespace sierra {
 namespace naluUnit {
@@ -75,7 +82,7 @@ public:
     const stk::mesh::PartVector& baseParts,
     const stk::mesh::PartVector& promotedParts);
 
-  bool add_field(const stk::mesh::FieldBase& field);
+  void add_fields(const std::vector<stk::mesh::FieldBase*>& fields);
   bool check_topology(const stk::mesh::PartVector& baseParts) const;
   int maximum_field_length(const stk::mesh::FieldBase& field) const;
 

@@ -1,8 +1,5 @@
 #ifndef nalu_make_unique_h
 #define nalu_make_unique_h
-#include <nalu_make_unique.h>
-#include <stk_mesh/base/CoordinateSystems.hpp>
-
 
 namespace sierra {
 namespace naluUnit {
