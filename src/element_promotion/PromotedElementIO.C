@@ -5,15 +5,15 @@
 #include <nalu_make_unique.h>
 
 #include <stk_mesh/base/MetaData.hpp>
-#include <stk_mesh/base/Part.hpp>
-#include <stk_mesh/base/Selector.hpp>
-#include <stk_topology/topology.hpp>
 #include <stk_mesh/base/Bucket.hpp>
 #include <stk_mesh/base/BulkData.hpp>
 #include <stk_mesh/base/BulkDataInlinedMethods.hpp>
 #include <stk_mesh/base/Entity.hpp>
 #include <stk_mesh/base/FieldBase.hpp>
 #include <stk_mesh/base/FieldRestriction.hpp>
+#include <stk_mesh/base/Part.hpp>
+#include <stk_mesh/base/Selector.hpp>
+#include <stk_topology/topology.hpp>
 #include <stk_topology/topology.tcc>
 #include <stk_util/environment/ReportHandler.hpp>
 

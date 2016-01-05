@@ -18,7 +18,7 @@ class TensorProductQuadratureRule
 public:
   TensorProductQuadratureRule(
     std::string type,
-    int order,
+    int numQuad,
     std::vector<double>& scsLocs
   );
   ~TensorProductQuadratureRule() {};
@@ -33,6 +33,10 @@ public:
   double gauss_point_location(
     int nodeOrdinal,
     int gaussPointOrdinal) const;
+
+  double tensor_product_weight(
+    int s1Node, int s2Node, int s3Node,
+    int s1Ip, int s2Ip, int s3Ip) const;
 
   double tensor_product_weight(
     int s1Node, int s2Node,

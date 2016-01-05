@@ -24,8 +24,8 @@ LagrangeBasis::LagrangeBasis(
      nodeLocs_(nodeLocs),
      dimension_(indicesMap[0].size())
 {
-  for (unsigned j = 0; j < indicesMap.size(); ++j) {
-    ThrowRequire(indicesMap[j].size() == dimension_);
+  for (auto& indices : indicesMap) {
+    ThrowRequire(indices.size() == dimension_);
   }
   set_lagrange_weights();
 }
@@ -49,6 +49,8 @@ LagrangeBasis::eval_basis_weights(
   const std::vector<double>& intgLoc) const
 {
   auto numIps = intgLoc.size() / dimension_;
+  ThrowAssert(numIps * dimension_ == intgLoc.size());
+
   auto numNodes = std::pow(numNodes1D_, dimension_);
   std::vector<double> interpolationWeights(numIps*numNodes);
 
@@ -63,8 +65,6 @@ LagrangeBasis::eval_basis_weights(
                                          indicesMap_[nodeNumber].data() );
     }
   }
-
-//  ThrowRequire(dimension_ == 2);
   return interpolationWeights;
 }
 //--------------------------------------------------------------------------

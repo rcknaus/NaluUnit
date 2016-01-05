@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <map>
 #include <memory>
-#include <string>
 #include <vector>
 
 namespace sierra {
@@ -20,7 +19,7 @@ typedef std::vector<std::vector<size_t>> SubElementConnectivity;
 struct ElementDescription
 {
 public:
-  static std::unique_ptr<ElementDescription> create(std::string type);
+  static std::unique_ptr<ElementDescription> create(int dimension, int order);
   virtual ~ElementDescription() = default;
 
   inline int tensor_product_node_map(int i, int j, int k) const
@@ -33,9 +32,14 @@ public:
     return nodeMap[i+nodes1D*j];
   }
 
+  inline int tensor_product_node_map_bc(int i, int j) const
+  {
+    return nodeMapBC[i+nodes1D*j];
+  }
+
   inline int tensor_product_node_map(int i) const
   {
-    return nodeMap1D[i];
+    return nodeMapBC[i];
   }
 
   inline double gauss_point_location(
@@ -43,6 +47,13 @@ public:
     int gaussPointOrdinal) const
   {
     return quadrature->gauss_point_location(nodeOrdinal,gaussPointOrdinal);
+  }
+
+  inline double tensor_product_weight(
+    int s1Node, int s2Node, int s3Node,
+    int s1Ip, int s2Ip, int s3Ip) const
+  {
+    return quadrature->tensor_product_weight(s1Node,s2Node,s3Node,s1Ip,s2Ip,s3Ip);
   }
 
   inline double tensor_product_weight(
@@ -69,6 +80,9 @@ public:
     return basis->eval_deriv_weights(intgLoc);
   }
 
+  std::vector<double> scsLoc;
+  std::vector<double> nodeLocs;
+
   size_t dimension;
   size_t nodes1D;
   size_t nodesPerElement;
@@ -86,11 +100,9 @@ public:
   std::unique_ptr<LagrangeBasis> basis;
   std::unique_ptr<LagrangeBasis> basisBoundary;
   std::vector<unsigned> nodeMap;
-  std::vector<unsigned> nodeMap1D;
-  std::vector<double> scsLoc;
-  std::vector<double> nodeLocs;
+  std::vector<unsigned> nodeMapBC;
   std::vector<std::vector<unsigned>> inverseNodeMap;
-  std::vector<std::vector<unsigned>> inverseNodeMap1D;
+  std::vector<std::vector<unsigned>> inverseNodeMapBC;
   std::vector<std::vector<size_t>> faceNodeMap;
 protected:
   ElementDescription() = default;
@@ -98,7 +110,7 @@ protected:
 
 struct QuadMElementDescription: public ElementDescription
 {
-  QuadMElementDescription(const std::vector<double> in_nodeLocs, const std::vector<double>& in_scsLoc);
+  QuadMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
 
 private:
   void set_node_maps(unsigned in_nodes1D);
@@ -113,15 +125,12 @@ private:
   void set_subelement_connectivity(unsigned in_nodes1D);
 };
 
-struct Quad16ElementDescription: public ElementDescription
+struct HexMElementDescription: public ElementDescription
 {
-  Quad16ElementDescription();
-};
+  HexMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
 
-
-struct Hex27ElementDescription: public ElementDescription
-{
-  Hex27ElementDescription();
+  void set_node_connectivity(unsigned in_nodes1D);
+  void set_subelement_connectivity(unsigned in_nodes1D);
 };
 
 } // namespace naluUnit

@@ -86,39 +86,54 @@ int main( int argc, char ** argv )
     delete surfaceFields;
   }
 
+  //std::string quadMesh = "test_meshes/2d_1m_P1.g";
   //std::string quadMesh = "test_meshes/1x1_tquad4_R0.g";
   std::string quadMesh = "test_meshes/quad4_64.g";
+
+  //std::string hexMesh = "test_meshes/2cm_ped_35K_mks.g";
+  //std::string hexMesh = "test_meshes/1cm_ped_35KR.g";
+  //std::string hexMesh = "test_meshes/100cm_13K_S_R1.g";
+  //std::string hexMesh = "test_meshes/hexLdomain.g";
+  std::string hexMesh = "test_meshes/hex8_4.g";
+
   const bool doPromotionQuad9 = true;
   if ( doPromotionQuad9 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad9", quadMesh);
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 2, quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
   const bool doPromotionQuad16 = true;
   if ( doPromotionQuad16 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad16", quadMesh);
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 3, quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
-  const bool doPromotionQuad25 = true;
-  if ( doPromotionQuad25 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad25", quadMesh);
-    promoteTest->execute();
-    delete promoteTest;
-  }
-
-  const bool doPromotionQuad36 = true;
-  if ( doPromotionQuad36 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Quad36", quadMesh);
+  const bool doPromotionQuad49 = true;
+  if ( doPromotionQuad49 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 6, quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
   const bool doPromotionHex27 = true;
   if ( doPromotionHex27 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest("Hex27", "test_meshes/hex8_32.g");
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 2, hexMesh);
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionHex64 = true;
+  if ( doPromotionHex64 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 3, hexMesh);
+    promoteTest->execute();
+    delete promoteTest;
+  }
+
+  const bool doPromotionHex343 = true;
+  if ( doPromotionHex343 ) {
+    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 6, hexMesh);
     promoteTest->execute();
     delete promoteTest;
   }
