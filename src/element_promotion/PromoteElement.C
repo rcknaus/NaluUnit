@@ -461,7 +461,7 @@ PromoteElement::populate_elem_node_relations(
         const auto* face_elem_ords = mesh.begin_element_ordinals(face);
         const unsigned face_ordinal = face_elem_ords[0];
         const auto elem_node_rels = elemNodeMap_.at(parent_elems[0]);
-        auto nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
+        const auto& nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
 
         if (dimension_ == 2) {
           for (unsigned j = 0; j < nodes1D; ++j) {
@@ -890,11 +890,8 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
   const auto& elem = sharedElems_[elemNumber];
   stk::mesh::Entity const* node_rels = mesh.begin_nodes(elem);
   const size_t numNodes = mesh.num_nodes(elem);
-
-  std::array<unsigned, 8> parent_node_ordinals;
   unsigned numParents = parentIds_.size();
-  ThrowAssert(numParents <= 8);
-
+  std::vector<size_t> unsortedParentOrdinals(numParents);
 
   // nodes are compared against a single set of parent ordinals
   // for edges, the sorted parent ordinals still form a chain and can be used
@@ -903,46 +900,28 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
   // For faces/volumes, I use the fact that the ordinals are not randomly ordered
   // so I can't just use the sorted parentIds atm and have to enforce parallel consistency
   // by sending over the reference parentIds
-  auto& referenceIds = (numParents > 2) ? unsortedParentIds_ : parentIds_;
+  const auto& referenceIds = (numParents > 2) ? unsortedParentIds_ : parentIds_;
 
   for (unsigned i = 0; i < numParents; ++i) {
     for (unsigned j = 0; j < numNodes; ++j) {
       if (mesh.identifier(node_rels[j]) == referenceIds[i]) {
-        parent_node_ordinals[i] = j;
+        unsortedParentOrdinals[i] = j;
       }
     }
   }
 
-  std::vector<size_t> unsortedParentOrdinals(numParents);
-  std::copy(parent_node_ordinals.begin(),
-    parent_node_ordinals.begin()+numParents,
-    unsortedParentOrdinals.begin()
-  );
-
   std::vector<size_t> reorderedOrdinals;
   for (const auto& relation : elemDesc.addedConnectivities) {
     if (relation.second.size() == numParents) {
-      std::vector<size_t> parentOrdinals(numParents);
-      std::copy(parent_node_ordinals.begin(),
-        parent_node_ordinals.begin()+numParents,
-        parentOrdinals.begin()
+      bool isPermutation = std::is_permutation(
+        relation.second.begin(),
+        relation.second.end(),
+        unsortedParentOrdinals.begin()
       );
 
-      if (parentOrdinals == relation.second) {
+      if (isPermutation) {
         childOrdinalsForElem_[elemNumber] = relation.first;
         break;
-      }
-      else {
-        bool isPermutation = std::is_permutation(
-          relation.second.begin(),
-          relation.second.end(),
-          parent_node_ordinals.begin()
-        );
-
-        if (isPermutation) {
-          childOrdinalsForElem_[elemNumber] = relation.first;
-          break;
-        }
       }
     }
   }
