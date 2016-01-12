@@ -237,9 +237,7 @@ PromoteElementTest::create_master_volume_element(const ElementDescription& elem)
   if (elem.dimension == 2) {
     return make_unique<HigherOrderQuad2DSCV>(elem);
   }
-
-    return make_unique<HigherOrderHexSCV>(elem);
-
+  return make_unique<HigherOrderHexSCV>(elem);
 }
 //--------------------------------------------------------------------------
 std::unique_ptr<MasterElement>
@@ -873,7 +871,6 @@ PromoteElementTest::compute_dual_nodal_volume_interior(
         *stk::mesh::field_data(*sharedElems_, node) = promoteElement_->num_elems(node);
       }
 
-
       // compute integration point volume
       double scv_error = -1.0;
       masterElement.determinant(1, &ws_coordinates[0], &ws_scv_volume[0], &scv_error);
@@ -1494,7 +1491,7 @@ PromoteElementTest::check_lobatto()
   xw1 = (14.0-std::sqrt(7.0))/60.0;
   xw2 = 1.0/30.0;
   exactX = {-1.0, -xl1, -xl0, xl0, +xl1, +1.0};
-  exactW = { xw2, xw1, xw0, xw0, xw1, xw2 }; // sums to 2
+  exactW = { xw2, xw1, xw0, xw0, xw1, xw2 }; // sums to 1
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;

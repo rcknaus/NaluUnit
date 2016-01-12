@@ -19,6 +19,10 @@
 namespace sierra {
 namespace naluUnit {
 
+  //TODO(rcknaus): ElementDescription has become pretty bulky
+  // separate out the CVFEM-specific stuff
+
+
 std::unique_ptr<ElementDescription>
 ElementDescription::create(int dimension,int order)
 {
@@ -90,8 +94,8 @@ QuadMElementDescription::QuadMElementDescription(
   numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   useGLLGLL = false;
 
-  set_node_connectivity(nodes1D);
-  set_subelement_connectivity(nodes1D);
+  set_node_connectivity();
+  set_subelement_connectivity();
 
   quadrature = make_unique<TensorProductQuadratureRule>("GaussLegendre", numQuad, scsLoc);
   basis = make_unique<LagrangeBasis>(inverseNodeMap, nodeLocs);
@@ -99,15 +103,15 @@ QuadMElementDescription::QuadMElementDescription(
 };
 //--------------------------------------------------------------------------
 void
-QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
+QuadMElementDescription::set_node_connectivity()
 {
   unsigned baseNodesPerElement = 4;
   unsigned nodeNumber = baseNodesPerElement;
 
-  nodeMap.resize(in_nodes1D*in_nodes1D);
+  nodeMap.resize(nodes1D*nodes1D);
   auto nmap = [&] (unsigned i, unsigned j) -> unsigned&
   {
-    return (nodeMap[i+in_nodes1D*j]);
+    return (nodeMap[i+nodes1D*j]);
   };
 
   struct EdgeInfo
@@ -123,9 +127,10 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
       {{2,3}, {-1, 1,1}},
       {{3,0}, {-2, 0,1}}
   };
+
   int faceMap[4] = {0,1,2,3};
 
-  unsigned jmax = in_nodes1D-1;
+  unsigned jmax = nodes1D-1;
   std::vector<size_t> baseFaceNodes = {0, 1, 2, 3};
 
   nmap(0,0)       = 0;
@@ -136,16 +141,15 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
   faceNodeMap.resize(4);
   unsigned faceOrdinal = 0;
   for (auto& baseEdge : baseEdgeInfo) {
-    std::vector<size_t> nodesToAdd(in_nodes1D-2);
-    for (unsigned j =0; j < in_nodes1D-2; ++j) {
+    auto direction = baseEdge.second.direction;
+    std::vector<size_t> nodesToAdd(nodes1D-2);
+    for (unsigned j =0; j < nodes1D-2; ++j) {
       nodesToAdd[j] = nodeNumber;
       ++nodeNumber;
     }
     edgeNodeConnectivities.insert({nodesToAdd,baseEdge.first});
 
-    auto direction = baseEdge.second.direction;
     auto nodesCopy = nodesToAdd;
-    auto nodeLocsCopy = nodeLocs;
     if (direction < 0) {
       std::reverse(nodesCopy.begin(), nodesCopy.end());
     }
@@ -166,7 +170,7 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
 
     std::vector<std::vector<double>> locs(polyOrder-1);
     for (unsigned i = 0; i < polyOrder-1; ++i) {
-      locs[i].push_back(nodeLocsCopy[1+i]);
+      locs[i].push_back(nodeLocs[1+i]);
     }
     locationsForNewNodes.insert({nodesToAdd,locs});
 
@@ -187,8 +191,12 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
      ++faceOrdinal;
   }
 
+  // reverse edges oriented in the negative direction in isoparametric space
+  std::reverse(faceNodeMap[faceMap[2]].begin(), faceNodeMap[faceMap[2]].end());
+  std::reverse(faceNodeMap[faceMap[3]].begin(), faceNodeMap[faceMap[3]].end());
+
   unsigned faceNodeNumber = nodeNumber;
-  unsigned nodesLeft = (in_nodes1D*in_nodes1D) - faceNodeNumber;
+  unsigned nodesLeft = (nodes1D*nodes1D) - faceNodeNumber;
   std::vector<size_t> faceNodesToAdd(nodesLeft);
   for (unsigned j = 0; j < nodesLeft;++j) {
     faceNodesToAdd[j] = faceNodeNumber;
@@ -218,9 +226,9 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
     addedConnectivities.insert(faceNode);
   }
 
-  nodeMapBC.resize(in_nodes1D);
+  nodeMapBC.resize(nodes1D);
   nodeMapBC[0] = 0;
-  nodeMapBC[in_nodes1D-1] = 1;
+  nodeMapBC[nodes1D-1] = 1;
 
   nodeNumber = 2;
   for (unsigned j = 1; j < polyOrder; ++j) {
@@ -229,26 +237,26 @@ QuadMElementDescription::set_node_connectivity(unsigned in_nodes1D)
   }
 
   //inverse maps
-  inverseNodeMap.resize(in_nodes1D*in_nodes1D);
-  for (unsigned i = 0; i < in_nodes1D; ++i) {
-    for (unsigned j = 0; j < in_nodes1D; ++j) {
+  inverseNodeMap.resize(nodes1D*nodes1D);
+  for (unsigned i = 0; i < nodes1D; ++i) {
+    for (unsigned j = 0; j < nodes1D; ++j) {
       inverseNodeMap[tensor_product_node_map(i,j)] = {i, j};
     }
   }
 
-  inverseNodeMapBC.resize(in_nodes1D);
-  for (unsigned j = 0; j < in_nodes1D; ++j) {
+  inverseNodeMapBC.resize(nodes1D);
+  for (unsigned j = 0; j < nodes1D; ++j) {
     inverseNodeMapBC[tensor_product_node_map(j)] = { j };
   }
 }
 //--------------------------------------------------------------------------
 void
-QuadMElementDescription::set_subelement_connectivity(unsigned in_nodes1D)
+QuadMElementDescription::set_subelement_connectivity()
 {
-  subElementConnectivity.resize((in_nodes1D-1)*(in_nodes1D-1));
-  for (unsigned j = 0; j < in_nodes1D-1; ++j) {
-    for (unsigned i = 0; i < in_nodes1D-1; ++i) {
-      subElementConnectivity[i+(in_nodes1D-1)*j] =
+  subElementConnectivity.resize((nodes1D-1)*(nodes1D-1));
+  for (unsigned j = 0; j < nodes1D-1; ++j) {
+    for (unsigned i = 0; i < nodes1D-1; ++i) {
+      subElementConnectivity[i+(nodes1D-1)*j] =
       {
           static_cast<size_t>(tensor_product_node_map(i,j)),
           static_cast<size_t>(tensor_product_node_map(i+1,j)),
@@ -272,8 +280,8 @@ HexMElementDescription::HexMElementDescription(
   numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   useGLLGLL = false;
 
-  set_node_connectivity(nodes1D);
-  set_subelement_connectivity(nodes1D);
+  set_node_connectivity();
+  set_subelement_connectivity();
 
   quadrature = make_unique<TensorProductQuadratureRule>("GaussLegendre", numQuad, scsLoc);
   basis = make_unique<LagrangeBasis>(inverseNodeMap, nodeLocs);
@@ -281,13 +289,13 @@ HexMElementDescription::HexMElementDescription(
 }
 //--------------------------------------------------------------------------
 void
-HexMElementDescription::set_subelement_connectivity(unsigned in_nodes1D)
+HexMElementDescription::set_subelement_connectivity()
 {
-  subElementConnectivity.resize((in_nodes1D-1)*(in_nodes1D-1)*(in_nodes1D-1));
-  for (unsigned k = 0; k < in_nodes1D-1; ++k) {
-    for (unsigned j = 0; j < in_nodes1D-1; ++j) {
-      for (unsigned i = 0; i < in_nodes1D-1; ++i) {
-        subElementConnectivity[i+(in_nodes1D-1)*(j+(in_nodes1D-1)*k)] =
+  subElementConnectivity.resize((nodes1D-1)*(nodes1D-1)*(nodes1D-1));
+  for (unsigned k = 0; k < nodes1D-1; ++k) {
+    for (unsigned j = 0; j < nodes1D-1; ++j) {
+      for (unsigned i = 0; i < nodes1D-1; ++i) {
+        subElementConnectivity[i+(nodes1D-1)*(j+(nodes1D-1)*k)] =
         {
             static_cast<size_t>(tensor_product_node_map(i+0,j+0,k+0)),
             static_cast<size_t>(tensor_product_node_map(i+1,j+0,k+0)),
@@ -304,16 +312,16 @@ HexMElementDescription::set_subelement_connectivity(unsigned in_nodes1D)
 }
 //--------------------------------------------------------------------------
 void
-HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
+HexMElementDescription::set_node_connectivity()
 {
   unsigned baseNodesPerElement = 8;
   unsigned nodeNumber = baseNodesPerElement;
 
-  nodeMap.assign(in_nodes1D*in_nodes1D*in_nodes1D,0);
-   auto nmap = [&] (unsigned i, unsigned j, unsigned k) -> unsigned&
-   {
-     return (nodeMap[i+in_nodes1D*(j+in_nodes1D*k)]);
-   };
+  nodeMap.assign(nodes1D*nodes1D*nodes1D,0);
+  auto nmap = [&] (unsigned i, unsigned j, unsigned k) -> unsigned&
+  {
+    return (nodeMap[i+nodes1D*(j+nodes1D*k)]);
+  };
 
   struct EdgeInfo
   {
@@ -338,7 +346,7 @@ HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
   };
 
   //add the base nodes to the map
-  unsigned jmax = in_nodes1D-1;
+  unsigned jmax = nodes1D-1;
   nmap(0,0,0)          = 0;
   nmap(jmax,0,0)       = 1;
   nmap(jmax,jmax,0)    = 2;
@@ -352,7 +360,7 @@ HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
       {0,1,2,3,4,5,6,7}
   };
 
-  unsigned nodes1DAdded = in_nodes1D-2;
+  unsigned nodes1DAdded = nodes1D-2;
   for (auto& baseEdge : baseEdgeInfo) {
     std::vector<size_t> nodesToAdd(nodes1DAdded);
     for (unsigned j =0; j < nodes1DAdded; ++j) {
@@ -410,7 +418,7 @@ HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
     locationsForNewNodes.insert({nodesToAdd,locs});
   }
 
-  // volume nodes are inserted second. Consistent with exodus format for P=2
+  // volume nodes are inserted second to be consistent with exodus format for P=2
   // (likely for consistency with Hex20 elements), but awkward here
   unsigned volumeNodeNumber = nodeNumber;
   for (auto& baseVolume : baseVolumeNodes) {
@@ -567,7 +575,13 @@ HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
     faceNodeMap[faceMap[faceOrdinal]] = faceNodes;
     ++faceOrdinal;
   }
-//  throw std::runtime_error("check");
+
+  // transform face ordinals depending on how they're arranged
+  // in isoparametric coordinates
+  flip_x<size_t>(faceNodeMap[2], nodes1D);
+  transpose_ordinals<size_t>(faceNodeMap[3], nodes1D);
+  transpose_ordinals<size_t>(faceNodeMap[4], nodes1D);
+
 
   for (const auto& edgeNode : edgeNodeConnectivities) {
     addedConnectivities.insert(edgeNode);
@@ -584,38 +598,21 @@ HexMElementDescription::set_node_connectivity(unsigned in_nodes1D)
   nodeMapBC = QuadMElementDescription(nodeLocs,scsLoc).nodeMap;
 
   //inverse maps
-  inverseNodeMap.resize(in_nodes1D*in_nodes1D*in_nodes1D);
-  for (unsigned i = 0; i < in_nodes1D; ++i) {
-    for (unsigned j = 0; j < in_nodes1D; ++j) {
-      for (unsigned k = 0; k < in_nodes1D; ++k) {
+  inverseNodeMap.resize(nodes1D*nodes1D*nodes1D);
+  for (unsigned i = 0; i < nodes1D; ++i) {
+    for (unsigned j = 0; j < nodes1D; ++j) {
+      for (unsigned k = 0; k < nodes1D; ++k) {
         inverseNodeMap[tensor_product_node_map(i,j,k)] = {i, j, k};
       }
     }
   }
 
-  inverseNodeMapBC.resize(in_nodes1D*in_nodes1D);
-  for (unsigned i = 0; i < in_nodes1D; ++i) {
-    for (unsigned j = 0; j < in_nodes1D; ++j) {
+  inverseNodeMapBC.resize(nodes1D*nodes1D);
+  for (unsigned i = 0; i < nodes1D; ++i) {
+    for (unsigned j = 0; j < nodes1D; ++j) {
       inverseNodeMapBC[tensor_product_node_map_bc(i,j)] = { i,j };
     }
   }
-
-  if (nodes1D == 3) {
-    std::vector<unsigned> nodeMapTest = {
-        0,  8,  1, // bottom front edge
-        11, 21,  9, // bottom mid-front edge
-        3, 10,  2, // bottom back edge
-        12, 25, 13, // mid-top front edge
-        23, 20, 24, // mid-top mid-front edge
-        15, 26, 14, // mid-top back edge
-        4, 16,  5, // top front edge
-        19, 22, 17, // top mid-front edge
-        7, 18,  6  // top back edge
-    };
-    auto mapcopy = nodeMap;
-    ThrowRequire(nodeMapTest == nodeMap);
-  }
-  //ThrowRequire(nodes1D != 4);
 }
 
 } // namespace naluUnit

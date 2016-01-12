@@ -96,14 +96,14 @@ int main( int argc, char ** argv )
   //std::string hexMesh = "test_meshes/hexLdomain.g";
   std::string hexMesh = "test_meshes/hex8_4.g";
 
-  const bool doPromotionQuad9 = true;
+  const bool doPromotionQuad9 =  true;
   if ( doPromotionQuad9 ) {
     auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 2, quadMesh);
     promoteTest->execute();
     delete promoteTest;
   }
 
-  const bool doPromotionQuad16 = true;
+  const bool doPromotionQuad16 =  true;
   if ( doPromotionQuad16 ) {
     auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 3, quadMesh);
     promoteTest->execute();
@@ -117,7 +117,7 @@ int main( int argc, char ** argv )
     delete promoteTest;
   }
 
-  const bool doPromotionHex27 = true;
+  const bool doPromotionHex27 =  true;
   if ( doPromotionHex27 ) {
     auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 2, hexMesh);
     promoteTest->execute();

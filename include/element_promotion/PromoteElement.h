@@ -85,10 +85,6 @@ private:
   public:
     explicit ChildNodeRequest(std::vector<stk::mesh::EntityId>  in_parentIds);
     ~ChildNodeRequest() = default;
-    ChildNodeRequest(ChildNodeRequest&&) = default;
-    ChildNodeRequest& operator=(ChildNodeRequest&&) = default;
-    ChildNodeRequest(const ChildNodeRequest&) = delete;
-    ChildNodeRequest& operator=(const ChildNodeRequest&) = delete;
 
     bool operator==(const ChildNodeRequest& other) const
     {
@@ -126,14 +122,11 @@ private:
 
     const std::vector<stk::mesh::EntityId> parentIds_; // invariant
     mutable std::vector<stk::mesh::EntityId> unsortedParentIds_;
-    mutable std::vector<std::vector<size_t>> unsortedParentOrdinals_;
     mutable std::vector<stk::mesh::Entity> children_;
     mutable std::vector<std::vector<size_t>> childOrdinalsForElem_;
     mutable std::vector<std::vector<size_t>> reorderedChildOrdinalsForElem_;
     mutable std::vector<stk::mesh::Entity> sharedElems_;
     mutable std::vector<int> sharingProcs_;
-    mutable bool reverseSharing_;
-    mutable unsigned elemIndex_;
 
     using IdProcPair = std::pair<int,stk::mesh::EntityId>;
     mutable std::vector<std::vector<IdProcPair>> idProcPairsFromAllProcs_;
@@ -162,6 +155,15 @@ private:
 
   bool check_elem_node_relations(const stk::mesh::BulkData& mesh) const;
 
+  template<typename T> void
+  reorder_ordinals(
+     std::vector<T>& ordinals,
+     const std::vector<T>& unsortedOrdinals,
+     const std::vector<T>& canonicalOrdinals,
+     unsigned numParents1D,
+     unsigned numAddedNodes1D
+   ) const;
+
   template<unsigned embedding_dimension, unsigned dimension>
   void interpolate_coords(
     const double* isoParCoord,
@@ -173,6 +175,7 @@ private:
   void set_new_node_coords(
     VectorFieldType& coordinates,
     const ElementDescription& elemDescription,
+    const stk::mesh::BulkData& mesh,
     NodeRequests& requests
   ) const;
 
@@ -181,9 +184,8 @@ private:
     VectorFieldType& coordinates,
     const stk::mesh::Entity* node_rels,
     std::vector<size_t>& childOrdinal,
-    const std::vector<size_t>& parentNodeOrdinals,
-    const std::vector<std::vector<double>>& isoParCoords
-  ) const;
+    const std::array<stk::mesh::Entity,ipow(2,dimension)>& parentNodes,
+    const std::vector<std::vector<double>>& isoParCoords) const;
 
   NodeRequests create_child_node_requests(
     stk::mesh::BulkData& mesh,

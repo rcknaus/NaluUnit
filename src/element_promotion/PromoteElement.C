@@ -31,6 +31,7 @@
 #include <map>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 namespace sierra{
 namespace naluUnit{
@@ -142,14 +143,17 @@ PromoteElement::promote_elements(const stk::mesh::PartVector& baseParts,
               << std::endl;
 
   if (dimension_ == 2) {
-    set_new_node_coords<2>(coordinates, elemDescription_, nodeRequests);
+    set_new_node_coords<2>(coordinates, elemDescription_, mesh, nodeRequests);
   }
   else {
-    set_new_node_coords<3>(coordinates, elemDescription_, nodeRequests);
+    set_new_node_coords<3>(coordinates, elemDescription_, mesh, nodeRequests);
   }
   auto timeF = MPI_Wtime();
   NaluEnv::self().naluOutputP0() << "P0: Time to set node coordinates: "
       << (timeF - timeE) << std::endl;
+
+  elemNodeMap_.rehash(elemNodeMap_.size());
+  nodeElemMap_.rehash(nodeElemMap_.size());
 }
 //--------------------------------------------------------------------------
 PromoteElement::NodeRequests
@@ -200,8 +204,8 @@ PromoteElement::create_child_node_requests(
         result.first->add_shared_elem(elem); // add a shared elem regardless
         if (result.second) {
           result.first->set_num_children(relation.first.size());
+          result.first->unsortedParentIds_ = std::move(unsortedParentIds);
         }
-        result.first->unsortedParentIds_ = unsortedParentIds;
         ++relationCount;
       }
     }
@@ -219,45 +223,23 @@ PromoteElement::create_child_node_requests(
     unsigned numShared = request.sharedElems_.size();
     request.childOrdinalsForElem_.resize(numShared);
     request.reorderedChildOrdinalsForElem_.resize(numShared);
-    request.unsortedParentOrdinals_.resize(numShared);
-    request.reverseSharing_ = false;
     for (unsigned elemNumber = 0; elemNumber < numShared; ++elemNumber) {
-      auto ordinals = request.determine_child_node_ordinal(mesh, elemDescription, elemNumber);
-      auto& canonicalOrdinals = elemDescription.addedConnectivities.at(ordinals);
-      auto& unsortedOrdinals = request.unsortedParentOrdinals_[elemNumber];
+      auto unsortedOrdinals =
+          request.determine_child_node_ordinal(mesh, elemDescription, elemNumber);
+      auto ordinalCopy = request.childOrdinalsForElem_[elemNumber];
+      auto& canonicalOrdinals = elemDescription.addedConnectivities.at(ordinalCopy);
 
-      if (parents_are_reversed<size_t>(unsortedOrdinals, canonicalOrdinals)) {
-        std::reverse(ordinals.begin(), ordinals.end());
-        if(unsortedOrdinals.size() == numParents1D*numParents1D) {
-          flip_x<size_t>(ordinals,numAddedNodes1D);
-        }
-      }
-      else if (parents_are_flipped_x<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-        flip_x<size_t>(ordinals,numAddedNodes1D);
-      }
-      else if (parents_are_flipped_y<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-        flip_y<size_t>(ordinals,numAddedNodes1D); // never executed AFAIK
-      }
-      else if (unsortedOrdinals != canonicalOrdinals) {
-        transpose_ordinals<size_t>(ordinals,numAddedNodes1D);
-        // if transposed, the "off-diagional" nodes (i.e. (1,0)->1 and (0,1)->3) should be inverted
-        if (unsortedOrdinals[1] != canonicalOrdinals[3]) {
-          throw std::runtime_error("Element promotion: unexpected permutation of parent ordinals");
-        }
-      }
-      else {
-        // swap sharing in the opposite case for when parents are reversed
+      reorder_ordinals<size_t>(
+        ordinalCopy,
+        unsortedOrdinals,
+        canonicalOrdinals,
+        numParents1D,
+        numAddedNodes1D
+      );
 
-        // FIXME(rcknaus): in 3D, this should be an enum denoting
-        // the correct ordinal transformation to apply (e.g. transpose_ordinals)
-        if (dimension_ == 2) {
-          request.reverseSharing_ = true;
-        }
-      }
-      request.reorderedChildOrdinalsForElem_[elemNumber] = std::move(ordinals);
+      request.reorderedChildOrdinalsForElem_[elemNumber] = std::move(ordinalCopy);
     }
   }
-
 
   return requestSet;
 }
@@ -287,7 +269,6 @@ PromoteElement::batch_create_child_nodes(
     parallel_communicate_ids(mesh, requests);
   }
 
-
   for (auto& request : requests) {
      request.set_node_entity_for_request(mesh, node_parts);
   }
@@ -303,7 +284,7 @@ PromoteElement::parallel_communicate_ids(
     for (const auto& request : requests) {
       for (auto other_proc : request.sharingProcs_) {
         if (other_proc != mesh.parallel_rank()) {
-          const auto& request_parents = request.parentIds_;
+          const auto& request_parents = request.unsortedParentIds_;
           const auto numChildren = request.num_children();
           comm_spec.send_buffer(other_proc).pack(request.num_parents());
           comm_spec.send_buffer(other_proc).pack(numChildren);
@@ -327,29 +308,69 @@ PromoteElement::parallel_communicate_ids(
     }
   }
 
+  unsigned numAddedNodes1D = elemDescription_.nodes1D-2;
   for (int i = 0; i < mesh.parallel_size(); ++i) {
     if (i != mesh.parallel_rank()) {
       while (comm_spec.recv_buffer(i).remaining() != 0) {
+
         size_t num_parents;
         size_t num_children;
         stk::mesh::EntityId suggested_node_id;
         comm_spec.recv_buffer(i).unpack(num_parents);
         comm_spec.recv_buffer(i).unpack(num_children);
         std::vector<stk::mesh::EntityId> parentIds(num_parents);
+
         for (auto& parentId : parentIds) {
           comm_spec.recv_buffer(i).unpack(parentId);
         }
-        auto iter = requests.find(ChildNodeRequest{ parentIds });
 
+        std::vector<size_t> indices;
+        auto sortedParentIds = parentIds;
+        std::sort(sortedParentIds.begin(),sortedParentIds.end());
+        auto iter = requests.find(ChildNodeRequest{std::move(sortedParentIds)});
         bool hasParents = iter != requests.end();
+
+        if (hasParents) {
+          indices.resize(num_children);
+          std::iota(indices.begin(), indices.end(), 0);
+
+          // nodes are compared against a single set of parent ordinals
+          // for edges, the sorted parent ordinals still form a chain and can be used,
+          // making the ordinals parallel consistent by construction
+
+          // For faces/volumes, I use the fact that the ordinals are not randomly ordered
+          // so I can't just use the sorted parentIds atm and have to enforce parallel consistency
+          // by sending over the reference parentIds and matching nodes
+
+          if (num_children == numAddedNodes1D*numAddedNodes1D && dimension_ == 3) {
+            auto request = *iter;
+            unsigned elemNumber = 0u;
+            unsigned numParents1D = 2;
+
+            // lower rank processes lead
+            if (i < mesh.parallel_rank()) {
+              request.unsortedParentIds_ = parentIds;
+            }
+            auto unsortedOrdinals =
+                request.determine_child_node_ordinal(mesh, elemDescription_, elemNumber);
+            auto& canonicalOrdinals =
+                elemDescription_.addedConnectivities.at(
+                  request.childOrdinalsForElem_[0]);
+
+            reorder_ordinals<size_t>(
+              indices,
+              unsortedOrdinals,
+              canonicalOrdinals,
+              numParents1D,
+              numAddedNodes1D
+            );
+          }
+        }
+
         for (unsigned j = 0; j < num_children; ++j) {
           comm_spec.recv_buffer(i).unpack(suggested_node_id);
           if (hasParents) {
-            int jr = j;
-            if (iter->reverseSharing_) {
-              jr = iter->childOrdinalsForElem_[0].size()-j-1;
-            }
-            iter->add_proc_id_pair(i, suggested_node_id, jr);
+            iter->add_proc_id_pair(i, suggested_node_id, indices[j]);
           }
         }
       }
@@ -403,19 +424,6 @@ PromoteElement::populate_elem_node_relations(
   unsigned nodes1D = elemDescription.nodes1D;
   for (const auto& request : requests) {
     unsigned numShared = request.sharedElems_.size();
-    request.childOrdinalsForElem_.resize(numShared);
-    request.unsortedParentOrdinals_.resize(numShared);
-
-    request.elemIndex_ = 0;
-    for (unsigned j = 0; j < numShared; ++j) {
-      auto& ordinals = request.reorderedChildOrdinalsForElem_[j];
-      auto& childOrdinals = request.childOrdinalsForElem_[j];
-      if (ordinals == childOrdinals) {
-        request.elemIndex_ = j;
-        break;
-      }
-    }
-
     for (unsigned elemNumber = 0; elemNumber < numShared; ++elemNumber) {
       auto sharedElem = request.sharedElems_[elemNumber];
       auto& ordinals = request.reorderedChildOrdinalsForElem_[elemNumber];
@@ -435,7 +443,6 @@ PromoteElement::populate_elem_node_relations(
     const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
       topo, selector);
 
-    //elemNodeMapBC_.reserve(count_entities(boundary_buckets));
     nodeElemMapBC_.reserve(
       count_entities(boundary_buckets)*elemDescription_.nodes1D
     );
@@ -453,43 +460,23 @@ PromoteElement::populate_elem_node_relations(
 
         const auto* face_elem_ords = mesh.begin_element_ordinals(face);
         const unsigned face_ordinal = face_elem_ords[0];
-
         const auto elem_node_rels = elemNodeMap_.at(parent_elems[0]);
-
         auto nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
 
         if (dimension_ == 2) {
           for (unsigned j = 0; j < nodes1D; ++j) {
-            int ordinal;
-            if (face_ordinal == 2 || face_ordinal ==3) {
-              ordinal = elemDescription_.tensor_product_node_map(nodes1D-j-1);
-            }
-            else {
-              ordinal = elemDescription_.tensor_product_node_map(j);
-            }
-            faceNodes[ordinal] = elem_node_rels.at(nodeOrdinalsForFace.at(j));
+            int ordinal = elemDescription_.tensor_product_node_map(j);
+            faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[j]];
           }
         }
         else {
           for (unsigned j = 0; j < nodes1D; ++j) {
             for (unsigned i = 0; i < nodes1D; ++i) {
-              int ordinal;
-              if (face_ordinal == 2) {
-                ordinal = elemDescription_.tensor_product_node_map_bc(nodes1D-i-1,j);
-               }
-              else if (face_ordinal == 3 || face_ordinal == 4) {
-                ordinal = elemDescription_.tensor_product_node_map_bc(j,i);
-              }
-              else {
-                ordinal = elemDescription_.tensor_product_node_map_bc(i,j);
-              }
-              faceNodes[ordinal] = elem_node_rels.at(
-                nodeOrdinalsForFace.at(i+nodes1D*j)
-              );
+              int ordinal = elemDescription_.tensor_product_node_map_bc(i,j);;
+              faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[i+nodes1D*j]];
             }
           }
         }
-
         elemNodeMap_.insert({face, faceNodes});
 
         for (auto faceNode : faceNodes) {
@@ -530,6 +517,7 @@ template<unsigned embedding_dimension> void
 PromoteElement::set_new_node_coords(
   VectorFieldType& coordinates,
   const ElementDescription& elemDescription,
+  const stk::mesh::BulkData& mesh,
    NodeRequests& requests) const
 {
   //  hex/quad specific method for interpolating coordinates
@@ -541,34 +529,55 @@ PromoteElement::set_new_node_coords(
     auto numParents = request.parentIds_.size();
     auto& ordinals= request.childOrdinalsForElem_[elemIndex];
     auto* node_rels = begin_nodes_all(request.sharedElems_[elemIndex]);
-    auto& parentOrdinals = elemDescription.addedConnectivities.at(ordinals);
-    auto& childLocations = elemDescription.locationsForNewNodes.at(ordinals);
-
-    //auto parentOrdinals = request.unsortedParentOrdinals_[elemIndex];
+    auto childLocations = elemDescription.locationsForNewNodes.at(ordinals);
 
     switch (numParents)
     {
       case 2:
       {
+        std::array<stk::mesh::Entity,2> parentNodes;
+        for (unsigned j = 0; j < 2; ++j) {
+          parentNodes[j] = mesh.get_entity(
+            stk::topology::NODE_RANK,
+            request.unsortedParentIds_[j]
+          );
+        }
+
         set_coords_for_child<embedding_dimension, 1>(
           coordinates, node_rels,
-          ordinals, parentOrdinals,
+          ordinals, parentNodes,
           childLocations);
         break;
       }
       case 4:
       {
+        std::array<stk::mesh::Entity,4> parentNodes;
+        for (unsigned j = 0; j < 4; ++j) {
+          parentNodes[j] = mesh.get_entity(
+            stk::topology::NODE_RANK,
+            request.unsortedParentIds_[j]
+          );
+        }
+
         set_coords_for_child<embedding_dimension, 2>(
           coordinates, node_rels,
-          ordinals, parentOrdinals,
+          ordinals, parentNodes,
           childLocations);
         break;
       }
       case 8:
       {
+        std::array<stk::mesh::Entity,8> parentNodes;
+        for (unsigned j = 0; j < 8; ++j) {
+          parentNodes[j] = mesh.get_entity(
+            stk::topology::NODE_RANK,
+            request.unsortedParentIds_[j]
+          );
+        }
+
         set_coords_for_child<3, 3>(
           coordinates, node_rels,
-          ordinals, parentOrdinals,
+          ordinals, parentNodes,
           childLocations);
         break;
       }
@@ -582,18 +591,19 @@ PromoteElement::set_new_node_coords(
 //--------------------------------------------------------------------------
 template<unsigned embedding_dimension, unsigned dimension> void
 PromoteElement::set_coords_for_child(
-  VectorFieldType& coordinates, const stk::mesh::Entity* node_rels,
+  VectorFieldType& coordinates,
+  const stk::mesh::Entity* node_rels,
   std::vector<size_t>& childOrdinal,
-  const std::vector<size_t>& parentNodeOrdinals,
+  const std::array<stk::mesh::Entity,ipow(2,dimension)>& parentNodes,
   const std::vector<std::vector<double>>& isoParCoords) const
 {
   constexpr unsigned numParents = ipow(2,dimension);
-  ThrowAssert(parentNodeOrdinals.size() == numParents);
+  ThrowAssert(parentNodes.size() == numParents);
 
   std::array<double*, numParents> parentCoordPtrs;
   for (unsigned m = 0; m < numParents; ++m) {
     parentCoordPtrs[m] = static_cast<double*>(stk::mesh::field_data(
-      coordinates, node_rels[parentNodeOrdinals[m]]
+      coordinates, parentNodes[m]
     ));
   }
 
@@ -675,6 +685,35 @@ PromoteElement::interpolate_coords(
       interpolatedCoords[j] += shape_function[m] *
           parentCoords[j + m * embedding_dimension];
     }
+  }
+}
+//--------------------------------------------------------------------------
+template<typename T> void
+PromoteElement::reorder_ordinals(
+  std::vector<T>& ordinals,
+  const std::vector<T>& unsortedOrdinals,
+  const std::vector<T>& canonicalOrdinals,
+  unsigned numParents1D,
+  unsigned numAddedNodes1D) const
+{
+  if (parents_are_reversed<size_t>(unsortedOrdinals, canonicalOrdinals)) {
+    std::reverse(ordinals.begin(), ordinals.end());
+    if(unsortedOrdinals.size() == numParents1D*numParents1D) {
+      flip_x<size_t>(ordinals,numAddedNodes1D);
+    }
+  }
+  else if (parents_are_flipped_x<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
+    flip_x<size_t>(ordinals,numAddedNodes1D);
+  }
+  else if (parents_are_flipped_y<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
+    flip_y<size_t>(ordinals,numAddedNodes1D); // never executed AFAIK
+  }
+  else if (unsortedOrdinals[1] == canonicalOrdinals[3]) {
+    transpose_ordinals<size_t>(ordinals,numAddedNodes1D);
+  }
+  else  {
+    ThrowRequireMsg(unsortedOrdinals == canonicalOrdinals,
+      "Element promotion: unexpected permutation of parent ordinals");
   }
 }
 //--------------------------------------------------------------------------
@@ -856,17 +895,28 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
   unsigned numParents = parentIds_.size();
   ThrowAssert(numParents <= 8);
 
+
+  // nodes are compared against a single set of parent ordinals
+  // for edges, the sorted parent ordinals still form a chain and can be used
+  // making the ordinals parallel consistent by construction
+
+  // For faces/volumes, I use the fact that the ordinals are not randomly ordered
+  // so I can't just use the sorted parentIds atm and have to enforce parallel consistency
+  // by sending over the reference parentIds
+  auto& referenceIds = (numParents > 2) ? unsortedParentIds_ : parentIds_;
+
   for (unsigned i = 0; i < numParents; ++i) {
     for (unsigned j = 0; j < numNodes; ++j) {
-      if (mesh.identifier(node_rels[j]) == unsortedParentIds_[i]) {
+      if (mesh.identifier(node_rels[j]) == referenceIds[i]) {
         parent_node_ordinals[i] = j;
       }
     }
   }
-  unsortedParentOrdinals_[elemNumber].resize(numParents);
+
+  std::vector<size_t> unsortedParentOrdinals(numParents);
   std::copy(parent_node_ordinals.begin(),
     parent_node_ordinals.begin()+numParents,
-    unsortedParentOrdinals_[elemNumber].begin()
+    unsortedParentOrdinals.begin()
   );
 
   std::vector<size_t> reorderedOrdinals;
@@ -879,7 +929,6 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
       );
 
       if (parentOrdinals == relation.second) {
-        reorderedOrdinals = relation.first;
         childOrdinalsForElem_[elemNumber] = relation.first;
         break;
       }
@@ -891,14 +940,13 @@ PromoteElement::ChildNodeRequest::determine_child_node_ordinal(
         );
 
         if (isPermutation) {
-          reorderedOrdinals = relation.first;
           childOrdinalsForElem_[elemNumber] = relation.first;
           break;
         }
       }
     }
   }
-  return reorderedOrdinals;
+  return unsortedParentOrdinals;
 }
 
 

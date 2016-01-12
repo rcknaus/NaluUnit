@@ -110,27 +110,20 @@ protected:
 
 struct QuadMElementDescription: public ElementDescription
 {
+public:
   QuadMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
-
 private:
-  void set_node_maps(unsigned in_nodes1D);
-  void set_node_connectivity(unsigned in_nodes1D);
-
-  void set_node_locations(
-    const AddedConnectivityOrdinalMap& in_edgeNodeConnectivities,
-    const AddedConnectivityOrdinalMap& in_faceNodeConnectivities,
-    const std::vector<double>& in_nodeLocs
-  );
-
-  void set_subelement_connectivity(unsigned in_nodes1D);
+  void set_node_connectivity();
+  void set_subelement_connectivity();
 };
 
 struct HexMElementDescription: public ElementDescription
 {
+public:
   HexMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
-
-  void set_node_connectivity(unsigned in_nodes1D);
-  void set_subelement_connectivity(unsigned in_nodes1D);
+private:
+  void set_node_connectivity();
+  void set_subelement_connectivity();
 };
 
 } // namespace naluUnit

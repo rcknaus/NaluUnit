@@ -18,6 +18,9 @@
 namespace sierra{
 namespace naluUnit{
 
+  // WARNING: the weights will sum to 1 (instead of two)
+  // Multiply them by two to get the standard Gauss Quadrature rule
+
   std::pair<Teuchos::SerialDenseVector<int,double>, Teuchos::SerialDenseVector<int,double>>
   jacobi_recursion_coefficients(
     const double alpha,
@@ -29,6 +32,8 @@ namespace naluUnit{
     Teuchos::SerialDenseVector<int,double> b(N);
 
     // for Legendre-type rules
+
+
     if (alpha == 0.0 && beta == 0.0) {
       a.putScalar(0.0);
       b[0] = 1.0;
