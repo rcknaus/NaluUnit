@@ -701,21 +701,24 @@ PromoteElement::reorder_ordinals(
   }
 
   std::vector<T> reorderedOrdinals;
-  if (parents_are_reversed<size_t>(unsortedOrdinals, canonicalOrdinals)) {
+  if (parents_are_reversed<T>(unsortedOrdinals, canonicalOrdinals)) {
     reorderedOrdinals = ordinals;
     std::reverse(reorderedOrdinals.begin(), reorderedOrdinals.end());
     if(unsortedOrdinals.size() == numParents1D*numParents1D) {
-      reorderedOrdinals = flip_x<size_t>(reorderedOrdinals, numAddedNodes1D);
+      reorderedOrdinals = flip_x<T>(reorderedOrdinals, numAddedNodes1D);
     }
   }
-  else if (parents_are_flipped_x<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-    reorderedOrdinals = flip_x<size_t>(ordinals,numAddedNodes1D);
+  else if (parents_are_flipped_x<T>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
+    reorderedOrdinals = flip_x<T>(ordinals,numAddedNodes1D);
   }
-  else if (parents_are_flipped_y<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-    reorderedOrdinals = flip_y<size_t>(ordinals,numAddedNodes1D); // never executed AFAIK
+  else if (parents_are_flipped_y<T>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
+    reorderedOrdinals = flip_y<T>(ordinals,numAddedNodes1D); // never executed AFAIK
   }
-  else if (should_transpose<size_t>(unsortedOrdinals, canonicalOrdinals)) {
-    reorderedOrdinals = transpose_ordinals<size_t>(ordinals,numAddedNodes1D);
+  else if (should_transpose<T>(unsortedOrdinals, canonicalOrdinals)) {
+    reorderedOrdinals = transpose_ordinals<T>(ordinals,numAddedNodes1D);
+  }
+  else if (should_invert<T>(unsortedOrdinals, canonicalOrdinals)) {
+    reorderedOrdinals = invert_ordinals_yx<T>(ordinals,numAddedNodes1D);
   }
   else  {
     ThrowRequireMsg(unsortedOrdinals == canonicalOrdinals,

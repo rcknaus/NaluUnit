@@ -90,6 +90,7 @@ int main( int argc, char ** argv )
   //std::string quadMesh = "test_meshes/1x1_tquad4_R0.g";
   std::string quadMesh = "test_meshes/quad4_64.g";
 
+  //std::string hexMesh = "test_meshes/thex8_8.g";
   //std::string hexMesh = "test_meshes/2cm_ped_35K_mks.g";
   //std::string hexMesh = "test_meshes/1cm_ped_35KR.g";
   //std::string hexMesh = "test_meshes/100cm_13K_S_R1.g";

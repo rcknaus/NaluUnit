@@ -80,8 +80,8 @@ namespace naluUnit {
 
     std::vector<T> reorderedOrdinals(childOrdinals.size());
     for (unsigned j = 0; j < size1D; ++j) {
+      int jr = size1D-j-1;
       for (unsigned i = 0; i < size1D; ++i) {
-        int jr = size1D-j-1;
         reorderedOrdinals[i+size1D*j] = childOrdinals[i+size1D*jr];
       }
     }
@@ -100,8 +100,8 @@ namespace naluUnit {
     }
     bool parentAreFlipped = true;
     for (unsigned j = 0; j < size1D; ++j) {
+      int jr = size1D-j-1;
       for (unsigned i = 0; i < size1D; ++i) {
-        int jr = size1D-j-1;
         if (gold[i+size1D*j] != test[i+size1D*jr]) {
           return false;
         }
@@ -137,6 +137,42 @@ namespace naluUnit {
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
         reorderedOrdinals[i+size1D*j] = childOrdinals[j+size1D*i];
+      }
+    }
+    return reorderedOrdinals;
+  }
+
+  template<typename T> bool
+  should_invert(
+    const std::vector<T>& test,
+    const std::vector<T>& gold)
+  {
+    ThrowAssert(test.size() == gold.size());
+    if (test.size() != 4) {
+      return false;
+    }
+
+    //check if diagonal nodes ((0,0)->0 and (1,1)->2) are reversed
+    // if so, transpose-reverse the ordinals
+    return (test[0] == gold[2]
+         && test[1] == gold[1]
+         && test[2] == gold[0]
+         && test[3] == gold[3] );
+  }
+
+  template<typename T> std::vector<T>
+  invert_ordinals_yx(
+    const std::vector<T>& childOrdinals,
+    unsigned size1D)
+  {
+    ThrowAssert(childOrdinals.size() == size1D*size1D);
+
+    std::vector<T> reorderedOrdinals(childOrdinals.size());
+    for (unsigned j = 0; j < size1D; ++j) {
+      int jr = size1D-j-1;
+      for (unsigned i = 0; i < size1D; ++i) {
+        int ir = size1D-i-1;
+        reorderedOrdinals[i+size1D*j] = childOrdinals[jr+size1D*ir];
       }
     }
     return reorderedOrdinals;
