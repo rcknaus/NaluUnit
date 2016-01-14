@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <vector>
+#include <stk_util/environment/ReportHandler.hpp>
 
 namespace sierra {
 namespace naluUnit {
@@ -19,31 +20,32 @@ namespace naluUnit {
     const std::vector<T>& gold)
   {
     const unsigned numParents = gold.size();
-    if (test.size() != numParents) {
-      return false;
-    }
+    ThrowAssert(test.size() == numParents);
 
     bool parentAreFlipped = true;
     for (unsigned j = 0; j < numParents; ++j) {
-      if (gold.at(j) != test.at(numParents-1-j)) {
+      if (gold[j] != test[numParents-1-j]) {
         return false;
       }
     }
     return parentAreFlipped;
   }
 
-  template<typename T> void
+  template<typename T> std::vector<T>
   flip_x(
-    std::vector<T>& childOrdinals,
+    const std::vector<T>& childOrdinals,
     unsigned size1D)
   {
-    auto copy = childOrdinals;
+    ThrowAssert(childOrdinals.size() == size1D*size1D);
+
+    std::vector<T> reorderedOrdinals(childOrdinals.size());
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
         int ir = size1D-i-1;
-        childOrdinals.at(i+(size1D)*j) = copy.at(ir+(size1D)*j);
+        reorderedOrdinals[i+size1D*j] = childOrdinals[ir+size1D*j];
       }
     }
+    return reorderedOrdinals;
   }
 
   template<typename T> bool
@@ -52,7 +54,8 @@ namespace naluUnit {
     const std::vector<T>& gold,
     unsigned size1D)
   {
-    if (test.size() != gold.size() || test.size() != size1D*size1D) {
+    ThrowAssert(test.size() == gold.size());
+    if (test.size() != size1D*size1D) {
       return false;
     }
 
@@ -60,7 +63,7 @@ namespace naluUnit {
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
         int ir = size1D-i-1;
-        if (gold.at(i+(size1D)*j) != test.at(ir+(size1D)*j)) {
+        if (gold[i+size1D*j] != test[ir+size1D*j]) {
           return false;
         }
       }
@@ -68,18 +71,21 @@ namespace naluUnit {
     return parentAreFlipped;
   }
 
-  template<typename T> void
+  template<typename T> std::vector<T>
   flip_y(
-    std::vector<T>& childOrdinals,
+    const std::vector<T>& childOrdinals,
     unsigned size1D)
   {
-    auto copy = childOrdinals;
+    ThrowAssert(childOrdinals.size() == size1D*size1D);
+
+    std::vector<T> reorderedOrdinals(childOrdinals.size());
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
         int jr = size1D-j-1;
-        childOrdinals.at(i+(size1D)*j) = copy.at(i+(size1D)*jr);
+        reorderedOrdinals[i+size1D*j] = childOrdinals[i+size1D*jr];
       }
     }
+    return reorderedOrdinals;
   }
 
   template<typename T> bool
@@ -88,14 +94,15 @@ namespace naluUnit {
     const std::vector<T>& gold,
     unsigned size1D)
   {
-    if (test.size() != gold.size() || test.size() != size1D*size1D) {
+    ThrowAssert(test.size() == gold.size());
+    if (test.size() != size1D*size1D) {
       return false;
     }
     bool parentAreFlipped = true;
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
         int jr = size1D-j-1;
-        if (gold.at(i+(size1D)*j) != test.at(i+(size1D)*jr)) {
+        if (gold[i+size1D*j] != test[i+size1D*jr]) {
           return false;
         }
       }
@@ -103,17 +110,36 @@ namespace naluUnit {
     return parentAreFlipped;
   }
 
-  template<typename T> void
+  template<typename T> bool
+  should_transpose(
+    const std::vector<T>& test,
+    const std::vector<T>& gold)
+  {
+    ThrowAssert(test.size() == gold.size());
+    if (test.size() != 4) {
+      return false;
+    }
+
+    //check if off-diagonal nodes ((1,0)->1 and (0,1)->3) are reversed
+    // if so, transpose the ordinals
+    return (test[1] == gold[3] && test[3] == gold[1]);
+  }
+
+
+  template<typename T> std::vector<T>
   transpose_ordinals(
-    std::vector<T>& childOrdinals,
+    const std::vector<T>& childOrdinals,
     unsigned size1D)
   {
-    auto copy = childOrdinals;
+    ThrowAssert(childOrdinals.size() == size1D*size1D);
+
+    std::vector<T> reorderedOrdinals(childOrdinals.size());
     for (unsigned j = 0; j < size1D; ++j) {
       for (unsigned i = 0; i < size1D; ++i) {
-        childOrdinals.at(i+(size1D)*j) = copy.at(j+(size1D)*i);
+        reorderedOrdinals[i+size1D*j] = childOrdinals[j+size1D*i];
       }
     }
+    return reorderedOrdinals;
   }
 
 } // namespace naluUnit

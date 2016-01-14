@@ -27,6 +27,10 @@ TensorProductQuadratureRule::TensorProductQuadratureRule(
   scsEndLoc_[scsLocs.size()+1] = +1.0;
 
   std::tie(abscissae_, weights_) = gauss_legendre_rule(numQuad);
+  double isoparametricFactor = 0.5;
+  for (auto& weight : weights_) {
+    weight *= isoparametricFactor;
+  }
 }
 //--------------------------------------------------------------------------
 double
@@ -35,7 +39,7 @@ TensorProductQuadratureRule::isoparametric_mapping(
   const double a,
   const double xi) const
 {
-  return xi*(b-a)/2.0 +(a+b)/2.0;
+  return (0.5*(xi*(b-a) + (a+b)));
 }
 //--------------------------------------------------------------------------
 double

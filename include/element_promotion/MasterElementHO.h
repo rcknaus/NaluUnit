@@ -9,6 +9,7 @@
 
 #include <element_promotion/MasterElement.h>
 #include <vector>
+#include <array>
 
 namespace sierra{
 namespace naluUnit{
@@ -104,7 +105,7 @@ private:
     const Jacobian::Direction direction,
     const double *elemNodalCoords,
     double *shapeDeriv,
-    double *areaVector ) const;
+    std::array<double, 3>& areaVector ) const;
 
   void gradient(
     const double* elemNodalCoords,
@@ -145,7 +146,7 @@ private:
   void area_vector(
     const double *elemNodalCoords,
     const double *shapeDeriv,
-    double *areaVector) const;
+    std::array<double,3>& areaVector) const;
 
   void quad9_shape_fcn(
     int numIntPoints,
@@ -238,9 +239,9 @@ private:
 
   void area_vector(
     const Jacobian::Direction direction,
-    const double *elemNodalCoords,
-    double *shapeDeriv,
-    double *normalVec ) const;
+    const double* elemNodalCoords,
+    const double* shapeDeriv,
+    std::array<double,2>& areaVector) const;
 
   void gradient(
     const double* elemNodalCoords,
@@ -279,7 +280,7 @@ private:
   void area_vector(
     const double* elemNodalCoords,
     const double* shapeDeriv,
-    double* normalVec) const;
+    std::array<double,2>&  areaVector) const;
 
   const ElementDescription& elem_;
   std::vector<double> ipWeight_;

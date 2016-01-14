@@ -16,10 +16,8 @@
 #include <stk_util/parallel/CommSparse.hpp>
 #include <stk_mesh/base/Bucket.hpp>
 #include <stk_mesh/base/BulkData.hpp>
-#include <stk_mesh/base/BulkDataInlinedMethods.hpp>
 #include <stk_mesh/base/FieldBase.hpp>
 #include <stk_topology/topology.hpp>
-#include <stk_topology/topology.tcc>
 #include <stk_util/environment/ReportHandler.hpp>
 #include <stk_util/parallel/ParallelComm.hpp>
 
@@ -111,8 +109,10 @@ PromoteElement::begin_side_elems_all(const stk::mesh::Entity& elem) const
 }
 //--------------------------------------------------------------------------
 void
-PromoteElement::promote_elements(const stk::mesh::PartVector& baseParts,
-  VectorFieldType& coordinates, stk::mesh::BulkData& mesh,
+PromoteElement::promote_elements(
+  const stk::mesh::PartVector& baseParts,
+  VectorFieldType& coordinates,
+  stk::mesh::BulkData& mesh,
   stk::mesh::PartVector& promotedParts)
 {
   ThrowRequireMsg(mesh.in_modifiable_state(),
@@ -188,12 +188,12 @@ PromoteElement::create_child_node_requests(
       const stk::mesh::Entity* nodes = b.begin_nodes(k);
       size_t relationCount = 0;
       for (const auto& relation : connectivities) {
-        auto& parentOrdinals = relation.second;
+        const auto& parentOrdinals = relation.second;
         for (size_t j = 0; j < parentOrdinals.size(); ++j) {
           parentIds[relationCount][j] = mesh.identifier(nodes[parentOrdinals[j]]);
         }
 
-        auto unsortedParentIds = parentIds[relationCount];
+        const auto unsortedParentIds = parentIds[relationCount];
         std::sort(
           parentIds[relationCount].begin(),
           parentIds[relationCount].end()
@@ -224,20 +224,18 @@ PromoteElement::create_child_node_requests(
     request.childOrdinalsForElem_.resize(numShared);
     request.reorderedChildOrdinalsForElem_.resize(numShared);
     for (unsigned elemNumber = 0; elemNumber < numShared; ++elemNumber) {
-      auto unsortedOrdinals =
+      const auto unsortedOrdinals =
           request.determine_child_node_ordinal(mesh, elemDescription, elemNumber);
-      auto ordinalCopy = request.childOrdinalsForElem_[elemNumber];
-      auto& canonicalOrdinals = elemDescription.addedConnectivities.at(ordinalCopy);
+      const auto& ordinals = request.childOrdinalsForElem_[elemNumber];
+      const auto& canonicalOrdinals = elemDescription.addedConnectivities.at(ordinals);
 
-      reorder_ordinals<size_t>(
-        ordinalCopy,
+      request.reorderedChildOrdinalsForElem_[elemNumber] = reorder_ordinals<size_t>(
+        ordinals,
         unsortedOrdinals,
         canonicalOrdinals,
         numParents1D,
         numAddedNodes1D
       );
-
-      request.reorderedChildOrdinalsForElem_[elemNumber] = std::move(ordinalCopy);
     }
   }
 
@@ -340,7 +338,8 @@ PromoteElement::parallel_communicate_ids(
 
           // For faces/volumes, I use the fact that the ordinals are not randomly ordered
           // so I can't just use the sorted parentIds atm and have to enforce parallel consistency
-          // by sending over the reference parentIds and matching nodes
+          // by sending over the reference parentIds and then match indices with the ordinals to ensure
+          // consistent global node ids in parallel
 
           if (num_children == numAddedNodes1D*numAddedNodes1D && dimension_ == 3) {
             auto request = *iter;
@@ -351,13 +350,13 @@ PromoteElement::parallel_communicate_ids(
             if (i < mesh.parallel_rank()) {
               request.unsortedParentIds_ = parentIds;
             }
-            auto unsortedOrdinals =
+            const auto unsortedOrdinals =
                 request.determine_child_node_ordinal(mesh, elemDescription_, elemNumber);
-            auto& canonicalOrdinals =
+            const auto& canonicalOrdinals =
                 elemDescription_.addedConnectivities.at(
                   request.childOrdinalsForElem_[0]);
 
-            reorder_ordinals<size_t>(
+            indices = reorder_ordinals<size_t>(
               indices,
               unsortedOrdinals,
               canonicalOrdinals,
@@ -527,9 +526,9 @@ PromoteElement::set_new_node_coords(
     unsigned elemIndex = 0u;
 
     auto numParents = request.parentIds_.size();
-    auto& ordinals= request.childOrdinalsForElem_[elemIndex];
-    auto* node_rels = begin_nodes_all(request.sharedElems_[elemIndex]);
-    auto childLocations = elemDescription.locationsForNewNodes.at(ordinals);
+    const auto& ordinals= request.childOrdinalsForElem_[elemIndex];
+    const auto* node_rels = begin_nodes_all(request.sharedElems_[elemIndex]);
+    const auto& childLocations = elemDescription.locationsForNewNodes.at(ordinals);
 
     switch (numParents)
     {
@@ -593,7 +592,7 @@ template<unsigned embedding_dimension, unsigned dimension> void
 PromoteElement::set_coords_for_child(
   VectorFieldType& coordinates,
   const stk::mesh::Entity* node_rels,
-  std::vector<size_t>& childOrdinal,
+  const std::vector<size_t>& childOrdinals,
   const std::array<stk::mesh::Entity,ipow(2,dimension)>& parentNodes,
   const std::vector<std::vector<double>>& isoParCoords) const
 {
@@ -614,15 +613,15 @@ PromoteElement::set_coords_for_child(
     }
   }
 
-  for (unsigned j = 0; j < childOrdinal.size(); ++j) {
+  for (unsigned j = 0; j < childOrdinals.size(); ++j) {
     auto* coords =
         static_cast<double*>(
-            stk::mesh::field_data(coordinates, node_rels[childOrdinal[j]]
+            stk::mesh::field_data(coordinates, node_rels[childOrdinals[j]]
         )
     );
 
     interpolate_coords<embedding_dimension, dimension>(
-      isoParCoords[j].data(),
+      isoParCoords[j],
       parentCoords,
       coords
     );
@@ -631,7 +630,7 @@ PromoteElement::set_coords_for_child(
 //--------------------------------------------------------------------------
 template<unsigned embedding_dimension, unsigned dimension> void
 PromoteElement::interpolate_coords(
-  const double* isoParCoord,
+  const std::vector<double>& isoParCoord,
   const std::array<double, embedding_dimension*ipow(2,dimension)>& parentCoords,
   double* interpolatedCoords) const
 {
@@ -688,33 +687,43 @@ PromoteElement::interpolate_coords(
   }
 }
 //--------------------------------------------------------------------------
-template<typename T> void
+template<typename T> std::vector<T>
 PromoteElement::reorder_ordinals(
-  std::vector<T>& ordinals,
+  const std::vector<T>& ordinals,
   const std::vector<T>& unsortedOrdinals,
   const std::vector<T>& canonicalOrdinals,
   unsigned numParents1D,
   unsigned numAddedNodes1D) const
 {
+  // unnecessary if P < 3
+  if (elemDescription_.polyOrder < 3) {
+    return ordinals;
+  }
+
+  std::vector<T> reorderedOrdinals;
   if (parents_are_reversed<size_t>(unsortedOrdinals, canonicalOrdinals)) {
-    std::reverse(ordinals.begin(), ordinals.end());
+    reorderedOrdinals = ordinals;
+    std::reverse(reorderedOrdinals.begin(), reorderedOrdinals.end());
     if(unsortedOrdinals.size() == numParents1D*numParents1D) {
-      flip_x<size_t>(ordinals,numAddedNodes1D);
+      reorderedOrdinals = flip_x<size_t>(reorderedOrdinals, numAddedNodes1D);
     }
   }
   else if (parents_are_flipped_x<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-    flip_x<size_t>(ordinals,numAddedNodes1D);
+    reorderedOrdinals = flip_x<size_t>(ordinals,numAddedNodes1D);
   }
   else if (parents_are_flipped_y<size_t>(unsortedOrdinals, canonicalOrdinals, numParents1D)) {
-    flip_y<size_t>(ordinals,numAddedNodes1D); // never executed AFAIK
+    reorderedOrdinals = flip_y<size_t>(ordinals,numAddedNodes1D); // never executed AFAIK
   }
-  else if (unsortedOrdinals[1] == canonicalOrdinals[3]) {
-    transpose_ordinals<size_t>(ordinals,numAddedNodes1D);
+  else if (should_transpose<size_t>(unsortedOrdinals, canonicalOrdinals)) {
+    reorderedOrdinals = transpose_ordinals<size_t>(ordinals,numAddedNodes1D);
   }
   else  {
     ThrowRequireMsg(unsortedOrdinals == canonicalOrdinals,
       "Element promotion: unexpected permutation of parent ordinals");
+
+    reorderedOrdinals = ordinals;
   }
+  return reorderedOrdinals;
 }
 //--------------------------------------------------------------------------
 size_t

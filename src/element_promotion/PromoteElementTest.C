@@ -52,7 +52,7 @@ PromoteElementTest::PromoteElementTest(int dimension, int order, std::string mes
     currentTime_(0.0),
     resultsFileIndex_(1),
     meshName_(std::move(meshName)),
-    floatingPointTolerance_(1.0e-12),
+    defaultFloatingPointTolerance_(1.0e-12),
     constScalarField_(true),
     nDim_(dimension),
     order_(order)
@@ -1262,20 +1262,9 @@ PromoteElementTest::register_fields()
 {
   // extract blocks in the mesh with target names that are specified inline
   std::vector<std::string> targetNames;
-  targetNames.push_back("block_1");
-  if (nDim_ == 2) {
-    targetNames.push_back("surface_1");
-    targetNames.push_back("surface_2");
-    targetNames.push_back("surface_3");
-    targetNames.push_back("surface_4");
-  }
-  else {
-//    targetNames.push_back("surface_1");
-//    targetNames.push_back("surface_2");
-//    targetNames.push_back("surface_3");
-//    targetNames.push_back("surface_4");
-//    targetNames.push_back("surface_5");
-//    targetNames.push_back("surface_6");
+  auto& meshParts = metaData_->get_mesh_parts();
+  for (const auto* part : meshParts) {
+    targetNames.push_back(part->name());
   }
 
   std::vector<std::string> promotedNames;
@@ -1386,7 +1375,7 @@ PromoteElementTest::output_results()
 //--------------------------------------------------------------------------
 bool PromoteElementTest::is_near(double approx, double exact)
 {
-  return (std::abs(approx-exact) < floatingPointTolerance_);
+  return (std::abs(approx-exact) < defaultFloatingPointTolerance_);
 }
 //--------------------------------------------------------------------------
 bool PromoteElementTest::is_near(
@@ -1396,7 +1385,7 @@ bool PromoteElementTest::is_near(
   bool is_near = false;
   if (approx.size() == exact.size()) {
     for (unsigned j = 0; j < approx.size(); ++j) {
-      if (std::abs(approx[j] - exact[j]) >= floatingPointTolerance_) {
+      if (std::abs(approx[j] - exact[j]) >= defaultFloatingPointTolerance_) {
         return false;
       }
       is_near = true;
@@ -1445,7 +1434,7 @@ PromoteElementTest::output_coords(stk::mesh::Entity node, unsigned dim)
 bool
 PromoteElementTest::check_lobatto()
 {
-  double tol = 1.0e-15; // needs to be pretty accurate
+  double tol = 5.0e-15; // needs to be pretty accurate
 
   bool testPassed = false;
   std::vector<double> abscissae;
@@ -1455,7 +1444,7 @@ PromoteElementTest::check_lobatto()
 
   std::tie(abscissae,weights) = gauss_lobatto_legendre_rule(3);
   exactX = {-1.0, 0.0, +1.0};
-  exactW = { 1.0/6.0, 2.0/3.0, 1.0/6.0 };
+  exactW = { 1.0/3.0, 4.0/3.0, 1.0/3.0 };
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1463,10 +1452,10 @@ PromoteElementTest::check_lobatto()
 
   std::tie(abscissae,weights) = gauss_lobatto_legendre_rule(4);
   double xl0 = std::sqrt(5.0)/5.0;
-  double xw0 = 5.0/12.0;
-  double xw1 = 1.0/12.0;
+  double xw0 = 5.0/6.0;
+  double xw1 = 1.0/6.0;
   exactX = {-1.0, -xl0, +xl0, +1.0};
-  exactW = { xw1, xw0, xw0, xw1 }; // sums to 1
+  exactW = { xw1, xw0, xw0, xw1 }; // sums to 2
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1474,11 +1463,11 @@ PromoteElementTest::check_lobatto()
 
   std::tie(abscissae,weights) = gauss_lobatto_legendre_rule(5);
   xl0 = std::sqrt(21.0)/7.0;
-  xw0 = 32.0/90.0;
-  xw1 = 49.0/180.0;
-  double xw2 = 1.0/20.0;
+  xw0 = 32.0/45.0;
+  xw1 = 49.0/90.0;
+  double xw2 = 1.0/10.0;
   exactX = {-1.0, -xl0, 0.0, xl0, +1.0};
-  exactW = { xw2, xw1, xw0, xw1, xw2 }; // sums to 1
+  exactW = { xw2, xw1, xw0, xw1, xw2 }; // sums to 2
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1487,11 +1476,11 @@ PromoteElementTest::check_lobatto()
   std::tie(abscissae,weights) = gauss_lobatto_legendre_rule(6);
   xl0 = std::sqrt((7.0-2.0*std::sqrt(7.0))/21.0);
   double xl1 = std::sqrt((7.0+2.0*std::sqrt(7.0))/21.0);
-  xw0 = (14.0+std::sqrt(7.0))/60.0;
-  xw1 = (14.0-std::sqrt(7.0))/60.0;
-  xw2 = 1.0/30.0;
+  xw0 = (14.0+std::sqrt(7.0))/30.0;
+  xw1 = (14.0-std::sqrt(7.0))/30.0;
+  xw2 = 1.0/15.0;
   exactX = {-1.0, -xl1, -xl0, xl0, +xl1, +1.0};
-  exactW = { xw2, xw1, xw0, xw0, xw1, xw2 }; // sums to 1
+  exactW = { xw2, xw1, xw0, xw0, xw1, xw2 }; // sums to 2
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1514,7 +1503,7 @@ PromoteElementTest::check_legendre()
 
   std::tie(abscissae,weights) = gauss_legendre_rule(2);
   exactX = {-std::sqrt(3.0)/3.0, std::sqrt(3.0)/3.0 };
-  exactW = { 0.5, 0.5 };
+  exactW = { 1.0, 1.0 };
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1522,7 +1511,7 @@ PromoteElementTest::check_legendre()
 
   std::tie(abscissae,weights) = gauss_legendre_rule(3);
   exactX = { -std::sqrt(3.0/5.0), 0.0, std::sqrt(3.0/5.0) };
-  exactW = { 5.0/18.0, 4.0/9.0,  5.0/18.0 };
+  exactW = { 5.0/9.0, 8.0/9.0,  5.0/9.0 };
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
     return false;
@@ -1537,10 +1526,31 @@ PromoteElementTest::check_legendre()
   };
 
   exactW = {
-      (18.0-std::sqrt(30.0))/72.0,
-      (18.0+std::sqrt(30.0))/72.0,
-      (18.0+std::sqrt(30.0))/72.0,
-      (18.0-std::sqrt(30.0))/72.0
+      (18.0-std::sqrt(30.0))/36.0,
+      (18.0+std::sqrt(30.0))/36.0,
+      (18.0+std::sqrt(30.0))/36.0,
+      (18.0-std::sqrt(30.0))/36.0
+  };
+
+  if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {
+    return false;
+  }
+
+  std::tie(abscissae,weights) = gauss_legendre_rule(5);
+  exactX = {
+      -std::sqrt(245.0+14.0*std::sqrt(70.0))/21.0,
+      -std::sqrt(245.0-14.0*std::sqrt(70.0))/21.0,
+      0.0,
+      +std::sqrt(245.0-14.0*std::sqrt(70.0))/21.0,
+      +std::sqrt(245.0+14.0*std::sqrt(70.0))/21.0
+  };
+
+  exactW = {
+      (322.0-13.0*std::sqrt(70.0))/900.0,
+      (322.0+13.0*std::sqrt(70.0))/900.0,
+      128.0/225.0,
+      (322.0+13.0*std::sqrt(70.0))/900.0,
+      (322.0-13.0*std::sqrt(70.0))/900.0
   };
 
   if (!is_near(abscissae,exactX,tol) || !is_near(weights,exactW,tol)) {

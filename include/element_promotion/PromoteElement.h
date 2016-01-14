@@ -155,9 +155,9 @@ private:
 
   bool check_elem_node_relations(const stk::mesh::BulkData& mesh) const;
 
-  template<typename T> void
+  template<typename T> std::vector<T>
   reorder_ordinals(
-     std::vector<T>& ordinals,
+     const std::vector<T>& ordinals,
      const std::vector<T>& unsortedOrdinals,
      const std::vector<T>& canonicalOrdinals,
      unsigned numParents1D,
@@ -166,7 +166,7 @@ private:
 
   template<unsigned embedding_dimension, unsigned dimension>
   void interpolate_coords(
-    const double* isoParCoord,
+    const std::vector<double>& isoParCoord,
     const std::array<double, embedding_dimension*ipow(2,dimension)>& parentCoords,
     double* interpolatedCoords
   ) const;
@@ -183,7 +183,7 @@ private:
   set_coords_for_child(
     VectorFieldType& coordinates,
     const stk::mesh::Entity* node_rels,
-    std::vector<size_t>& childOrdinal,
+    const std::vector<size_t>& childOrdinals,
     const std::array<stk::mesh::Entity,ipow(2,dimension)>& parentNodes,
     const std::vector<std::vector<double>>& isoParCoords) const;
 

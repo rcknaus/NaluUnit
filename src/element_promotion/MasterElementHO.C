@@ -612,7 +612,7 @@ HigherOrderHexSCS::determinant(
       area_vector( ipInfo_[ip].direction,
         &coords[coord_elem_offset],
         &shapeDerivs_[grad_offset],
-        areaVector.data() );
+        areaVector );
 
       // apply quadrature weight and orientation (combined as weight)
       for (int j = 0; j < nDim_; ++j) {
@@ -629,7 +629,7 @@ HigherOrderHexSCS::area_vector(
   const Jacobian::Direction direction,
   const double *elemNodalCoords,
   double *shapeDeriv,
-  double *areaVector) const
+  std::array<double,3>& areaVector) const
 {
 
   int s1Component; int s2Component;
@@ -911,7 +911,7 @@ HigherOrderQuad3DSCS::determinant(
       //compute area vector for this ip
       area_vector( &coords[coord_elem_offset],
         &shapeDerivs_[grad_offset],
-        areaVector.data() );
+        areaVector );
 
       // apply quadrature weight and orientation (combined as weight)
       for (int j = 0; j < nDim_; ++j) {
@@ -925,7 +925,7 @@ void
 HigherOrderQuad3DSCS::area_vector(
   const double *elemNodalCoords,
   const double *shapeDeriv,
-  double *areaVector) const
+  std::array<double,3>& areaVector) const
 {
   // return the normal area vector given shape derivatives dnds OR dndt
   double dx_ds1 = 0.0; double dy_ds1 = 0.0; double dz_ds1 = 0.0;
@@ -1116,6 +1116,7 @@ HigherOrderQuad2DSCS::set_interior_info()
   ipInfo_.resize(numIntPoints_);
 
   // specify integration point locations in a dimension-by-dimension manner
+  //int mid = (linesPerDirection);
 
   //u-direction
   int vector_index = 0;
@@ -1124,14 +1125,18 @@ HigherOrderQuad2DSCS::set_interior_info()
   for (int m = 0; m < linesPerDirection; ++m) {
     for (unsigned l = 0; l < elem_.nodes1D; ++l) {
 
-      int leftNode; int rightNode;
+      int leftNode;
+      int rightNode;
+      int orientation;
       if (m % 2 == 0) {
         leftNode  = elem_.tensor_product_node_map(l,m);
         rightNode = elem_.tensor_product_node_map(l,m + 1);
+        orientation = -1.0;
       }
       else {
         leftNode  = elem_.tensor_product_node_map(l,m + 1);
         rightNode = elem_.tensor_product_node_map(l,m);
+        orientation = +1.0;
       }
 
       for (unsigned j = 0; j < elem_.numQuad; ++j) {
@@ -1143,7 +1148,7 @@ HigherOrderQuad2DSCS::set_interior_info()
         intgLoc_[vector_index + 1] = elem_.scsLoc[m];
 
         //compute the quadrature weight
-        ipInfo_[scalar_index].weight = std::pow(-1.0, m+1)*elem_.tensor_product_weight(l,j);
+        ipInfo_[scalar_index].weight = orientation*elem_.tensor_product_weight(l,j);
 
         //direction
         ipInfo_[scalar_index].direction = Jacobian::T_DIRECTION;
@@ -1159,14 +1164,18 @@ HigherOrderQuad2DSCS::set_interior_info()
   for (int m = 0; m < linesPerDirection; ++m) {
     for (unsigned l = 0; l < elem_.nodes1D; ++l) {
 
-      int leftNode; int rightNode;
+      int leftNode;
+      int rightNode;
+      int orientation;
       if (m % 2 == 0) {
         leftNode  = elem_.tensor_product_node_map(m,l);
         rightNode = elem_.tensor_product_node_map(m+1,l);
+        orientation = +1.0;
       }
       else {
         leftNode  = elem_.tensor_product_node_map(m+1,l);
         rightNode = elem_.tensor_product_node_map(m,l);
+        orientation = -1.0;
       }
 
       for (unsigned j = 0; j < elem_.numQuad; ++j) {
@@ -1178,7 +1187,8 @@ HigherOrderQuad2DSCS::set_interior_info()
         intgLoc_[vector_index+1] = elem_.gauss_point_location(l,j);
 
         //compute the quadrature weight
-        ipInfo_[scalar_index].weight = std::pow(-1.0, m)*elem_.tensor_product_weight(l,j);
+
+        ipInfo_[scalar_index].weight = orientation*elem_.tensor_product_weight(l,j);
 
         //direction
         ipInfo_[scalar_index].direction = Jacobian::S_DIRECTION;
@@ -1196,6 +1206,7 @@ HigherOrderQuad2DSCS::set_boundary_info()
 {
   const int numFaces = 2*nDim_;
   const int nodesPerFace = elem_.nodes1D;
+  const int linesPerDirection = elem_.nodes1D-1;
   ipsPerFace_ = nodesPerFace*elem_.numQuad;
 
   const int numFaceIps = numFaces*ipsPerFace_;
@@ -1205,13 +1216,23 @@ HigherOrderQuad2DSCS::set_boundary_info()
   oppNode_.resize(numFaceIps);
   intgExpFace_.resize(numFaceIps*nDim_);
 
+  auto faceMap = elem_.faceNodeMap;
+  auto nodeMap = elem_.nodeMap;
+  auto nodeMap1D = elem_.nodeMapBC;
+
   auto face_node_number = [&] (int number,int faceOrdinal)
   {
     return elem_.faceNodeMap[faceOrdinal][number];
   };
 
-  const std::vector<int> faceToLine = { 0, 3, 1, 2 };
-  const std::vector<double> faceLoc = {-1.0, +1.0, +1.0, -1.0};
+  const std::array<int, 4> faceToLine = {{
+      0,
+      2*linesPerDirection-1,
+      linesPerDirection-1,
+      linesPerDirection
+  }};
+
+  const std::array<double, 4> faceLoc = {{-1.0, +1.0, +1.0, -1.0}};
 
   int scalar_index = 0; int vector_index = 0;
   int faceOrdinal = 0; //bottom face
@@ -1265,6 +1286,7 @@ HigherOrderQuad2DSCS::set_boundary_info()
     for (unsigned j = 0; j < elem_.numQuad; ++j) {
       ipNodeMap_[scalar_index] = nearNode;
       oppNode_[scalar_index] = oppNode;
+      //oppFace_[scalar_index] = oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
       oppFace_[scalar_index] = (ipsPerFace_-1) - oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
 
       intgExpFace_[vector_index] = intgLoc_[oppFace_[scalar_index]*nDim_+0];
@@ -1278,13 +1300,14 @@ HigherOrderQuad2DSCS::set_boundary_info()
 
   faceOrdinal = 3; //left face
   oppFaceIndex = 0;
-  //NOTE: this faces is reversed
+  //NOTE: this face is reversed
   for (int k = elemNodeM1; k >= 0; --k) {
     const int nearNode = face_node_number(elem_.nodes1D-k-1,faceOrdinal);
     int oppNode = elem_.tensor_product_node_map(1,k);
     for (unsigned j = 0; j < elem_.numQuad; ++j) {
       ipNodeMap_[scalar_index] = nearNode;
       oppNode_[scalar_index] = oppNode;
+      //oppFace_[scalar_index] = oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
       oppFace_[scalar_index] = (ipsPerFace_-1) - oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
 
       intgExpFace_[vector_index]   = faceLoc[faceOrdinal];
@@ -1295,6 +1318,7 @@ HigherOrderQuad2DSCS::set_boundary_info()
       ++oppFaceIndex;
     }
   }
+  //throw std::runtime_error("check");
 }
 //--------------------------------------------------------------------------
 void
@@ -1337,7 +1361,7 @@ HigherOrderQuad2DSCS::determinant(
       area_vector( ipInfo_[ip].direction,
                    &coords[coord_elem_offset],
                    &shapeDerivs_[grad_offset],
-                   areaVector.data() );
+                   areaVector );
 
       // apply quadrature weight and orientation (combined as weight)
       for (int j = 0; j < nDim_; ++j) {
@@ -1491,8 +1515,8 @@ void
 HigherOrderQuad2DSCS::area_vector(
   const Jacobian::Direction direction,
   const double *elemNodalCoords,
-  double *shapeDeriv,
-  double *normalVec ) const
+  const double *shapeDeriv,
+  std::array<double,2>& areaVector ) const
 {
   int s1Component;
   switch (direction) {
@@ -1515,8 +1539,8 @@ HigherOrderQuad2DSCS::area_vector(
     dxdr += shapeDeriv[vector_offset+s1Component] * xCoord;
     dydr += shapeDeriv[vector_offset+s1Component] * yCoord;
   }
-  normalVec[0] =  dydr;
-  normalVec[1] = -dxdr;
+  areaVector[0] =  dydr;
+  areaVector[1] = -dxdr;
 }
 //--------------------------------------------------------------------------
 //--------------------------------------------------------------------------
@@ -1572,7 +1596,7 @@ HigherOrderEdge2DSCS::determinant(
       // calculate the area vector
       area_vector( &coords[coord_elem_offset],
                    &shapeDerivs_[grad_offset],
-                   areaVector.data() );
+                   areaVector );
 
       // weight the area vector with the Gauss-quadrature weight for this IP
       areav[offset + 0] = ipWeight_[ip] * areaVector[0];
@@ -1597,7 +1621,7 @@ void
 HigherOrderEdge2DSCS::area_vector(
   const double* elemNodalCoords,
   const double* shapeDeriv,
-  double* normalVec) const
+  std::array<double,2>& areaVector) const
 {
   double dxdr = 0.0;  double dydr = 0.0;
   for (int node = 0; node < nodesPerElement_; ++node) {
@@ -1608,9 +1632,9 @@ HigherOrderEdge2DSCS::area_vector(
     dxdr += shapeDeriv[node] * xCoord;
     dydr += shapeDeriv[node] * yCoord;
   }
-  normalVec[0] =  dydr;
-  normalVec[1] = -dxdr;
+  areaVector[0] =  dydr;
+  areaVector[1] = -dxdr;
 }
 
-}  // namespace naluUnit
+}  // namespace nalu
 } // namespace sierra

@@ -100,7 +100,7 @@ QuadMElementDescription::QuadMElementDescription(
   quadrature = make_unique<TensorProductQuadratureRule>("GaussLegendre", numQuad, scsLoc);
   basis = make_unique<LagrangeBasis>(inverseNodeMap, nodeLocs);
   basisBoundary = make_unique<LagrangeBasis>(inverseNodeMapBC,nodeLocs);
-};
+}
 //--------------------------------------------------------------------------
 void
 QuadMElementDescription::set_node_connectivity()
@@ -149,9 +149,9 @@ QuadMElementDescription::set_node_connectivity()
     }
     edgeNodeConnectivities.insert({nodesToAdd,baseEdge.first});
 
-    auto nodesCopy = nodesToAdd;
+    auto reorderedNodes = nodesToAdd;
     if (direction < 0) {
-      std::reverse(nodesCopy.begin(), nodesCopy.end());
+      std::reverse(reorderedNodes.begin(), reorderedNodes.end());
     }
 
     unsigned il = (baseEdge.second.xloc == 1) ? jmax : 0;
@@ -159,12 +159,12 @@ QuadMElementDescription::set_node_connectivity()
 
     if (std::abs(direction) == 1) {
       for (unsigned j = 1; j < polyOrder; ++j) {
-        nmap(j,jl) = nodesCopy.at(j-1);
+        nmap(j,jl) = reorderedNodes.at(j-1);
       }
     }
     else {
       for (unsigned j = 1; j < polyOrder; ++j) {
-        nmap(il,j) = nodesCopy.at(j-1);
+        nmap(il,j) = reorderedNodes.at(j-1);
       }
     }
 
@@ -373,9 +373,9 @@ HexMElementDescription::set_node_connectivity()
     const auto direction = edgeInfo.direction;
     const auto& baseLoc = edgeInfo.baseLoc;
 
-    auto nodesCopy = nodesToAdd;
+    auto reorderedNodes = nodesToAdd;
     if (direction < 0) {
-      std::reverse(nodesCopy.begin(), nodesCopy.end());
+      std::reverse(reorderedNodes.begin(), reorderedNodes.end());
     }
 
     unsigned il = (baseLoc[0] == 1) ? jmax : 0;
@@ -387,21 +387,21 @@ HexMElementDescription::set_node_connectivity()
       case 1:
       {
         for (unsigned j = 1; j < polyOrder; ++j) {
-          nmap(j,jl,kl) = nodesCopy.at(j-1);
+          nmap(j,jl,kl) = reorderedNodes.at(j-1);
         }
         break;
       }
       case 2:
       {
         for (unsigned j = 1; j < polyOrder; ++j) {
-          nmap(il,j,kl) = nodesCopy.at(j-1);
+          nmap(il,j,kl) = reorderedNodes.at(j-1);
         }
         break;
       }
       case 3:
       {
         for (unsigned j = 1; j < polyOrder; ++j) {
-          nmap(il,jl,j) = nodesCopy.at(j-1);
+          nmap(il,jl,j) = reorderedNodes.at(j-1);
         }
         break;
       }
@@ -428,8 +428,6 @@ HexMElementDescription::set_node_connectivity()
       ++volumeNodeNumber;
     }
     volumeNodeConnectivities.insert({volumeNodesToAdd,baseVolume});
-
-    auto nodesCopy = volumeNodesToAdd;
 
     for (unsigned k = 1; k < polyOrder; ++k) {
       for (unsigned j = 1; j < polyOrder; ++j) {
@@ -488,22 +486,22 @@ HexMElementDescription::set_node_connectivity()
     const auto znormal = faceInfo.znormal;
     ThrowAssert(std::abs(xnormal)+std::abs(ynormal) + std::abs(znormal) == 1);
 
-    auto faceNodesToAddCopy = faceNodesToAdd;
+    std::vector<size_t> reorderedFaceNodes = faceNodesToAdd;
     bool isReflected = faceInfo.yreflected;
     if (isReflected) {
-      flip_x<size_t>(faceNodesToAddCopy,polyOrder-1);
+      reorderedFaceNodes = flip_x<size_t>(faceNodesToAdd, polyOrder-1);
     }
 
     bool isRotated = faceInfo.rotated;
     if (isRotated) {
-      transpose_ordinals<size_t>(faceNodesToAddCopy,polyOrder-1);
+      reorderedFaceNodes = transpose_ordinals<size_t>(faceNodesToAdd, polyOrder-1);
     }
 
     if (xnormal != 0) {
       const int il = (xnormal > 0) ? jmax : 0;
       for (unsigned j = 1; j < polyOrder; ++j) {
         for (unsigned i = 1; i < polyOrder; ++i) {
-          nmap(il,i,j) = faceNodesToAddCopy.at((i-1)+(polyOrder-1)*(j-1));
+          nmap(il,i,j) = reorderedFaceNodes.at((i-1)+(polyOrder-1)*(j-1));
         }
       }
     }
@@ -512,7 +510,7 @@ HexMElementDescription::set_node_connectivity()
       const int jl = (ynormal > 0) ? jmax : 0;
       for (unsigned j = 1; j < polyOrder; ++j) {
         for (unsigned i = 1; i < polyOrder; ++i) {
-          nmap(i,jl,j) = faceNodesToAddCopy.at((i-1)+(polyOrder-1)*(j-1));
+          nmap(i,jl,j) = reorderedFaceNodes.at((i-1)+(polyOrder-1)*(j-1));
         }
       }
     }
@@ -521,7 +519,7 @@ HexMElementDescription::set_node_connectivity()
       const int kl = (znormal > 0) ? jmax : 0;
       for (unsigned j = 1; j < polyOrder; ++j) {
         for (unsigned i = 1; i < polyOrder; ++i) {
-          nmap(i,j,kl) = faceNodesToAddCopy.at((i-1)+(polyOrder-1)*(j-1));
+          nmap(i,j,kl) = reorderedFaceNodes.at((i-1)+(polyOrder-1)*(j-1));
         }
       }
     }
@@ -578,9 +576,9 @@ HexMElementDescription::set_node_connectivity()
 
   // transform face ordinals depending on how they're arranged
   // in isoparametric coordinates
-  flip_x<size_t>(faceNodeMap[2], nodes1D);
-  transpose_ordinals<size_t>(faceNodeMap[3], nodes1D);
-  transpose_ordinals<size_t>(faceNodeMap[4], nodes1D);
+  faceNodeMap[2] = flip_x<size_t>(faceNodeMap[2], nodes1D);
+  faceNodeMap[3] = transpose_ordinals<size_t>(faceNodeMap[3], nodes1D);
+  faceNodeMap[4] = transpose_ordinals<size_t>(faceNodeMap[4], nodes1D);
 
 
   for (const auto& edgeNode : edgeNodeConnectivities) {

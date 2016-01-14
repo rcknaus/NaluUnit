@@ -133,7 +133,7 @@ public:
   const double currentTime_;
   size_t resultsFileIndex_;
   const std::string meshName_;
-  const double floatingPointTolerance_;
+  const double defaultFloatingPointTolerance_;
 
   // sets the scalar to 1. Otherwise, sets it equal to the
   // values for the heat conduction MMS
