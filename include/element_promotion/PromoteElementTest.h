@@ -59,7 +59,12 @@ class PromoteElementTest
 {
 public:
   // constructor/destructor
-  PromoteElementTest(int dimension, int order, std::string meshName);
+  PromoteElementTest(
+    int dimension,
+    int order,
+    std::string meshName,
+    std::string quadType = "GaussLegendre"
+  );
   ~PromoteElementTest();
 
   void execute();
@@ -78,6 +83,7 @@ public:
   void set_output_fields();
 
   void initialize_fields();
+  void initialize_scalar();
 
   void output_results();
 
@@ -97,37 +103,29 @@ public:
   void compute_dual_nodal_volume_interior(
     stk::mesh::Selector& selector);
 
+  void compute_dual_nodal_volume_interior_SGL(
+    stk::mesh::Selector& selector);
+
   void compute_projected_nodal_gradient_interior(
+    stk::mesh::Selector& selector);
+
+  void compute_projected_nodal_gradient_interior_SGL(
     stk::mesh::Selector& selector);
 
   void compute_projected_nodal_gradient_boundary(
     stk::mesh::Selector& selector);
 
+  void compute_projected_nodal_gradient_boundary_SGL(
+    stk::mesh::Selector& selector);
+
   bool check_node_count(unsigned polyOrder, unsigned originalNodeCount);
-  bool is_near(double approx, double exact);
-  bool is_near(const std::vector<double>& approx, const std::vector<double>& exact);
-  bool is_near(
-    const std::vector<double>& approx,
-    const std::vector<double>& exact,
-    double tolerance);
-  bool check_interpolation_quad();
-  bool check_interpolation_hex();
-  bool check_derivative_quad();
-  bool check_derivative_hex();
-  bool check_volume_quadrature_quad();
-  bool check_volume_quadrature_hex();
-  bool check_lobatto();
-  bool check_legendre();
-  bool check_projected_nodal_gradient();
-  double poly_val(std::vector<double> coeffs, double x);
-  double poly_int(std::vector<double> coeffs,double xlower, double xupper);
-  double poly_der(std::vector<double> coeffs, double x);
 
   std::string output_coords(stk::mesh::Entity node, unsigned dim);
 
   bool check_dual_nodal_volume();
   bool check_dual_nodal_volume_quad();
   bool check_dual_nodal_volume_hex();
+  bool check_projected_nodal_gradient();
 
   const bool activateAura_;
   const double currentTime_;
@@ -140,6 +138,8 @@ public:
   bool constScalarField_;
   unsigned nDim_;
   unsigned order_;
+  bool outputTiming_;
+  std::string quadType_;
 
   std::string elemType_;
   std::string coarseOutputName_;
@@ -149,6 +149,7 @@ public:
   std::unique_ptr<stk::mesh::MetaData> metaData_;
   std::unique_ptr<stk::mesh::BulkData> bulkData_;
   std::unique_ptr<stk::io::StkMeshIoBroker> ioBroker_;
+  double timer_;
 
   // New element classes
   std::unique_ptr<PromoteElement> promoteElement_;
@@ -161,6 +162,7 @@ public:
   // fields
   VectorFieldType* coordinates_;
   ScalarFieldType* dualNodalVolume_;
+  ScalarFieldType* detJ_;
   ScalarIntFieldType* sharedElems_;
   ScalarFieldType* q_;
   VectorFieldType* dqdx_;

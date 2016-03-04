@@ -22,16 +22,19 @@ namespace naluUnit {
   //TODO(rcknaus): ElementDescription has become pretty bulky
   // separate out the CVFEM-specific stuff
 
-
 std::unique_ptr<ElementDescription>
-ElementDescription::create(int dimension,int order)
+ElementDescription::create(int dimension,int order, std::string quadType)
 {
+  // Create a symmetric P=3 mass matrix
+  // We lose an order of accuracy when enabled
+  bool symmWeights = false;
+
   if (dimension == 2 && order == 2) {
     std::vector<double> in_nodeLocs = { -1.0, 0.0, +1.0 };
     std::vector<double> in_scsLoc = { -std::sqrt(3.0)/3.0, std::sqrt(3.0)/3.0 };
-    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc);
+    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
   }
-  if (dimension == 2 && order == 3) {
+  if (dimension == 2 && order == 3 && symmWeights) {
     // symmetric mass matrix
     // I can't find a symmetric mass matrix for P > 3
     double xgll    = 0.4487053820572093009546164613323186035;
@@ -39,40 +42,40 @@ ElementDescription::create(int dimension,int order)
     std::vector<double> in_nodeLocs = { -1.0, -xgll, +xgll, +1.0 };
     std::vector<double> in_scsLoc = { -scsDist, 0.0, scsDist };
 
-    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc);
+    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
   }
 
-  if (dimension == 2 && order > 3) {
+  if (dimension == 2 && order >= 3) {
      std::vector<double> lobattoNodes;
      std::vector<double> legendreSCSLocations;
      std::tie(lobattoNodes,std::ignore) = gauss_lobatto_legendre_rule(order+1);
      std::tie(legendreSCSLocations,std::ignore) = gauss_legendre_rule(order);
 
-     return make_unique<QuadMElementDescription>(lobattoNodes,legendreSCSLocations);
+     return make_unique<QuadMElementDescription>(lobattoNodes,legendreSCSLocations, quadType);
   }
 
   if (dimension == 3 && order == 2) {
     double scsDist = std::sqrt(3.0)/3.0;
     std::vector<double> in_nodeLocs = {-1.0, 0.0, +1.0};
     std::vector<double> in_scsLoc = { -scsDist, +scsDist };
-    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc);
+    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc, quadType);
   }
 
-  if (dimension == 3 && order == 3) {
+  if (dimension == 3 && order == 3 && symmWeights) {
     double xgll    = 0.4487053820572093009546164613323186035;
     double scsDist = 0.8347278713337825805263131558586123084;
     std::vector<double> in_nodeLocs = { -1.0, -xgll, +xgll, +1.0 };
     std::vector<double> in_scsLoc = { -scsDist, 0.0, scsDist };
-    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc);
+    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc, quadType);
   }
 
-  if (dimension == 3 && order > 3) {
+  if (dimension == 3 && order >= 3) {
      std::vector<double> lobattoNodes;
      std::vector<double> legendreSCSLocations;
      std::tie(lobattoNodes,std::ignore) = gauss_lobatto_legendre_rule(order+1);
      std::tie(legendreSCSLocations,std::ignore) = gauss_legendre_rule(order);
 
-     return make_unique<HexMElementDescription>(lobattoNodes,legendreSCSLocations);
+     return make_unique<HexMElementDescription>(lobattoNodes,legendreSCSLocations, quadType);
   }
 
   throw std::runtime_error("Element type not implemented");
@@ -80,24 +83,33 @@ ElementDescription::create(int dimension,int order)
 }
 
 QuadMElementDescription::QuadMElementDescription(
-  std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc)
+  std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc, std::string in_quadType)
   : ElementDescription()
 {
-  nodeLocs = in_nodeLocs;
-  scsLoc = in_scsLoc;
-  ThrowRequire(nodeLocs.size()-1 == scsLoc.size());
+  ThrowRequireMsg(in_nodeLocs.size()-1 == in_scsLoc.size(),
+    "Number of subcontrol subsurfaces must be one less than the number of nodes");
 
+  ThrowRequireMsg(in_quadType == "SGL" || in_quadType == "GaussLegendre",
+    "Only SGL and GaussLegendre quadrature types implemented");
+
+  scsLoc = in_scsLoc;
+  nodeLocs = in_nodeLocs;
   polyOrder = nodeLocs.size()-1;
   nodes1D = nodeLocs.size();
   nodesPerElement = nodes1D*nodes1D;
   dimension = 2;
-  numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
-  useGLLGLL = false;
+  quadType = in_quadType;
+  if (quadType == "SGL") {
+    numQuad = 1;
+  }
+  else {
+    numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
+  }
 
   set_node_connectivity();
   set_subelement_connectivity();
 
-  quadrature = make_unique<TensorProductQuadratureRule>("GaussLegendre", numQuad, scsLoc);
+  quadrature = make_unique<TensorProductQuadratureRule>(in_quadType, numQuad, scsLoc);
   basis = make_unique<LagrangeBasis>(inverseNodeMap, nodeLocs);
   basisBoundary = make_unique<LagrangeBasis>(inverseNodeMapBC,nodeLocs);
 }
@@ -268,22 +280,32 @@ QuadMElementDescription::set_subelement_connectivity()
 }
 //--------------------------------------------------------------------------
 HexMElementDescription::HexMElementDescription(
-  std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc)
+  std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc, std::string in_quadType)
 :  ElementDescription()
 {
+  ThrowRequireMsg(in_nodeLocs.size()-1 == in_scsLoc.size(),
+    "Number of subcontrol subsurfaces must be one less than the number of nodes");
+
+  ThrowRequireMsg(in_quadType == "SGL" || in_quadType == "GaussLegendre",
+    "Only SGL and GaussLegendre quadrature types implemented");
+
   scsLoc = in_scsLoc;
   nodeLocs = in_nodeLocs;
+  polyOrder = nodeLocs.size()-1;
   nodes1D = nodeLocs.size();
-  polyOrder = nodes1D-1;
   nodesPerElement = nodes1D*nodes1D*nodes1D;
   dimension = 3;
-  numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
-  useGLLGLL = false;
-
+  quadType = in_quadType;
+  if (quadType == "SGL") {
+    numQuad = 1;
+  }
+  else {
+    numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
+  }
   set_node_connectivity();
   set_subelement_connectivity();
 
-  quadrature = make_unique<TensorProductQuadratureRule>("GaussLegendre", numQuad, scsLoc);
+  quadrature = make_unique<TensorProductQuadratureRule>(in_quadType, numQuad, scsLoc);
   basis = make_unique<LagrangeBasis>(inverseNodeMap, nodeLocs);
   basisBoundary = make_unique<LagrangeBasis>(inverseNodeMapBC, nodeLocs);
 }
@@ -593,7 +615,7 @@ HexMElementDescription::set_node_connectivity()
     addedConnectivities.insert(faceNode);
   }
 
-  nodeMapBC = QuadMElementDescription(nodeLocs,scsLoc).nodeMap;
+  nodeMapBC = QuadMElementDescription(nodeLocs,scsLoc, quadType).nodeMap;
 
   //inverse maps
   inverseNodeMap.resize(nodes1D*nodes1D*nodes1D);

@@ -19,6 +19,9 @@ namespace naluUnit{
   std::pair<std::vector<double>, std::vector<double>>
   gauss_lobatto_legendre_rule(int order, double xleft = -1.0, double xright = +1.0);
 
+  std::pair<std::vector<double>, std::vector<double>>
+  GLS_quadrature_rule(int order, std::vector<double> scsEndLocations);
+
 } // namespace nalu
 } // namespace Sierra
 

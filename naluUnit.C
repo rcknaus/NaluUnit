@@ -9,6 +9,8 @@
 // nalu
 #include <NaluEnv.h>
 #include <element_promotion/PromoteElementTest.h>
+#include <element_promotion/QuadratureRuleTest.h>
+#include <element_promotion/MasterElementHOTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -86,9 +88,25 @@ int main( int argc, char ** argv )
     delete surfaceFields;
   }
 
+  //==============================
+  // Elem promotion unit test options
+
+  const bool doQuadrature = true;
+  const bool doMasterElementQuad = true;
+  const bool doMasterElementHex= true;
+  const bool doPromotionQuadGaussLegendre = true;
+  const bool doPromotionQuadSGL = true;
+  const bool doPromotionHexGaussLegendre = true;
+  const bool doPromotionHexSGL = true;
+
+
+  const int maxQuadOrder = 7;
+  const int maxHexOrder = 7;
+
   //std::string quadMesh = "test_meshes/2d_1m_P1.g";
   //std::string quadMesh = "test_meshes/1x1_tquad4_R0.g";
   std::string quadMesh = "test_meshes/quad4_64.g";
+
 
   //std::string hexMesh = "test_meshes/thex8_8.g";
   //std::string hexMesh = "test_meshes/2cm_ped_35K_mks.g";
@@ -96,47 +114,47 @@ int main( int argc, char ** argv )
   //std::string hexMesh = "test_meshes/100cm_13K_S_R1.g";
   //std::string hexMesh = "test_meshes/hexLdomain.g";
   std::string hexMesh = "test_meshes/hex8_4.g";
+  //==============================
 
-  const bool doPromotionQuad9 =  true;
-  if ( doPromotionQuad9 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 2, quadMesh);
-    promoteTest->execute();
-    delete promoteTest;
+
+  if ( doQuadrature ) {
+    sierra::naluUnit::QuadratureRuleTest().execute();
   }
 
-  const bool doPromotionQuad16 =  true;
-  if ( doPromotionQuad16 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 3, quadMesh);
-    promoteTest->execute();
-    delete promoteTest;
+  if ( doMasterElementQuad ) {
+    for (int j = 2; j <= maxQuadOrder; ++j) {
+      sierra::naluUnit::MasterElementHOTest(2, j).execute();
+    }
   }
 
-  const bool doPromotionQuad49 = true;
-  if ( doPromotionQuad49 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(2, 6, quadMesh);
-    promoteTest->execute();
-    delete promoteTest;
+  if (doMasterElementHex ) {
+    for (int j = 2; j <= maxHexOrder; ++j) {
+      sierra::naluUnit::MasterElementHOTest(3, j).execute();
+    }
   }
 
-  const bool doPromotionHex27 =  true;
-  if ( doPromotionHex27 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 2, hexMesh);
-    promoteTest->execute();
-    delete promoteTest;
+  if (doPromotionQuadGaussLegendre) {
+    for (int j = 2; j <= maxQuadOrder; ++j) {
+      sierra::naluUnit::PromoteElementTest(2, j, quadMesh, "GaussLegendre").execute();
+    }
   }
 
-  const bool doPromotionHex64 = true;
-  if ( doPromotionHex64 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 3, hexMesh);
-    promoteTest->execute();
-    delete promoteTest;
+  if (doPromotionQuadGaussLegendre) {
+    for (int j = 2; j <= maxQuadOrder; ++j) {
+      sierra::naluUnit::PromoteElementTest(2, j, quadMesh, "SGL").execute();
+    }
   }
 
-  const bool doPromotionHex343 = true;
-  if ( doPromotionHex343 ) {
-    auto promoteTest = new sierra::naluUnit::PromoteElementTest(3, 6, hexMesh);
-    promoteTest->execute();
-    delete promoteTest;
+  if (doPromotionHexGaussLegendre) {
+    for (int j = 2; j <= maxHexOrder; ++j) {
+      sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "GaussLegendre").execute();
+    }
+  }
+
+  if (doPromotionHexSGL) {
+    for (int j = 2; j <= maxHexOrder; ++j) {
+      sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "SGL").execute();
+    }
   }
 
   // all done

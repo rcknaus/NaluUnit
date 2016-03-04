@@ -193,22 +193,48 @@ private:
     const stk::mesh::Selector& selector
   ) const;
 
+  void determine_child_ordinals(
+    const ElementDescription& elemDescription,
+    const stk::mesh::BulkData& mesh,
+    NodeRequests& requests) const;
+
   void batch_create_child_nodes(
+    const ElementDescription& elemDescription,
     stk::mesh::BulkData & mesh,
     NodeRequests& requests,
     const stk::mesh::PartVector& node_parts
   ) const;
 
   void parallel_communicate_ids(
+    const ElementDescription& elemDescription,
     const stk::mesh::BulkData& mesh,
     NodeRequests& requests) const;
 
   void populate_elem_node_relations(
     const ElementDescription& elemDescription,
     stk::mesh::BulkData& mesh,
-    const stk::mesh::Selector selector,
+    const stk::mesh::Selector& selector,
     const NodeRequests& requests
   );
+
+  void populate_original_elem_node_relations(
+    stk::mesh::BulkData& mesh,
+    const stk::mesh::Selector& selector,
+    const NodeRequests& requests
+  );
+
+
+  void populate_new_elem_node_relations(
+    const NodeRequests& requests
+  );
+
+  void populate_boundary_elem_node_relations(
+    const ElementDescription& elemDescription,
+    stk::mesh::BulkData& mesh,
+    const stk::mesh::Selector& selector,
+    const NodeRequests& requests
+  );
+
 
   size_t count_nodes(
     const stk::mesh::PartVector& baseParts,

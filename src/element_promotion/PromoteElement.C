@@ -123,24 +123,15 @@ PromoteElement::promote_elements(
 
   auto basePartSelector = stk::mesh::selectUnion(baseParts);
 
-  auto timeB = MPI_Wtime();
   auto nodeRequests = create_child_node_requests(mesh, elemDescription_,
     basePartSelector);
-  auto timeC = MPI_Wtime();
-  NaluEnv::self().naluOutputP0() << "P0: Time to generate requests: "
-      << (timeC - timeB) << std::endl;
 
-  batch_create_child_nodes(mesh, nodeRequests, baseParts);
-  auto timeD = MPI_Wtime();
-  NaluEnv::self().naluOutputP0() << "P0: Time to create requested nodes: "
-      << (timeD - timeC) << std::endl;
+  determine_child_ordinals(elemDescription_,mesh, nodeRequests);
+
+  batch_create_child_nodes(elemDescription_, mesh, nodeRequests, baseParts);
 
   populate_elem_node_relations(elemDescription_, mesh, basePartSelector,
     nodeRequests);
-  auto timeE = MPI_Wtime();
-  NaluEnv::self().naluOutputP0()
-              << "P0: Time to save node relations to map: " << (timeE - timeD)
-              << std::endl;
 
   if (dimension_ == 2) {
     set_new_node_coords<2>(coordinates, elemDescription_, mesh, nodeRequests);
@@ -148,9 +139,6 @@ PromoteElement::promote_elements(
   else {
     set_new_node_coords<3>(coordinates, elemDescription_, mesh, nodeRequests);
   }
-  auto timeF = MPI_Wtime();
-  NaluEnv::self().naluOutputP0() << "P0: Time to set node coordinates: "
-      << (timeF - timeE) << std::endl;
 
   elemNodeMap_.rehash(elemNodeMap_.size());
   nodeElemMap_.rehash(nodeElemMap_.size());
@@ -211,6 +199,15 @@ PromoteElement::create_child_node_requests(
     }
   }
 
+  return requestSet;
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::determine_child_ordinals(
+  const ElementDescription& elemDescription,
+  const stk::mesh::BulkData& mesh,
+  NodeRequests& requests) const
+{
   //FIXME(rcknaus): clean-up the ordinal reversing logic
 
   // For P>2, we have to worry about whether an edge is ordered forward or backward
@@ -219,7 +216,7 @@ PromoteElement::create_child_node_requests(
   unsigned nodes1D = elemDescription.nodes1D;
   unsigned numAddedNodes1D = nodes1D-2;
   unsigned numParents1D = nodes1D-numAddedNodes1D; //2
-  for (auto& request : requestSet) {
+  for (auto& request : requests) {
     unsigned numShared = request.sharedElems_.size();
     request.childOrdinalsForElem_.resize(numShared);
     request.reorderedChildOrdinalsForElem_.resize(numShared);
@@ -238,12 +235,11 @@ PromoteElement::create_child_node_requests(
       );
     }
   }
-
-  return requestSet;
 }
 //--------------------------------------------------------------------------
 void
 PromoteElement::batch_create_child_nodes(
+  const ElementDescription& elemDescription,
   stk::mesh::BulkData& mesh,
   NodeRequests& requests,
   const stk::mesh::PartVector& node_parts) const
@@ -264,7 +260,7 @@ PromoteElement::batch_create_child_nodes(
   }
 
   if (mesh.parallel_size() > 1) {
-    parallel_communicate_ids(mesh, requests);
+    parallel_communicate_ids(elemDescription, mesh, requests);
   }
 
   for (auto& request : requests) {
@@ -274,7 +270,9 @@ PromoteElement::batch_create_child_nodes(
 //--------------------------------------------------------------------------
 void
 PromoteElement::parallel_communicate_ids(
-  const stk::mesh::BulkData& mesh, NodeRequests& requests) const
+  const ElementDescription& elemDescription,
+  const stk::mesh::BulkData& mesh,
+  NodeRequests& requests) const
 {
   stk::CommSparse comm_spec(mesh.parallel());
 
@@ -306,7 +304,7 @@ PromoteElement::parallel_communicate_ids(
     }
   }
 
-  unsigned numAddedNodes1D = elemDescription_.nodes1D-2;
+  unsigned numAddedNodes1D = elemDescription.nodes1D-2;
   for (int i = 0; i < mesh.parallel_size(); ++i) {
     if (i != mesh.parallel_rank()) {
       while (comm_spec.recv_buffer(i).remaining() != 0) {
@@ -351,9 +349,9 @@ PromoteElement::parallel_communicate_ids(
               request.unsortedParentIds_ = parentIds;
             }
             const auto unsortedOrdinals =
-                request.determine_child_node_ordinal(mesh, elemDescription_, elemNumber);
+                request.determine_child_node_ordinal(mesh, elemDescription, elemNumber);
             const auto& canonicalOrdinals =
-                elemDescription_.addedConnectivities.at(
+                elemDescription.addedConnectivities.at(
                   request.childOrdinalsForElem_[0]);
 
             indices = reorder_ordinals<size_t>(
@@ -380,15 +378,30 @@ PromoteElement::parallel_communicate_ids(
 void
 PromoteElement::populate_elem_node_relations(
   const ElementDescription& elemDescription, stk::mesh::BulkData& mesh,
-  const stk::mesh::Selector selector, const NodeRequests& requests)
+  const stk::mesh::Selector& selector, const NodeRequests& requests)
 {
+
   const stk::mesh::BucketVector& elem_buckets = mesh.get_buckets(
     stk::topology::ELEM_RANK, selector);
-  const stk::mesh::BucketVector& node_buckets = mesh.get_buckets(
-    stk::topology::NODE_RANK, selector);
 
   elemNodeMap_.reserve(count_entities(elem_buckets));
   nodeElemMap_.reserve(count_requested_nodes(requests));
+
+  populate_original_elem_node_relations(mesh, selector, requests);
+  populate_new_elem_node_relations(requests);
+  populate_boundary_elem_node_relations(elemDescription, mesh, selector, requests);
+
+  ThrowAssert(check_elem_node_relations(mesh));
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::populate_original_elem_node_relations(
+  stk::mesh::BulkData& mesh,
+  const stk::mesh::Selector& selector,
+  const NodeRequests& requests)
+{
+  const stk::mesh::BucketVector& elem_buckets = mesh.get_buckets(
+    stk::topology::ELEM_RANK, selector);
 
   // initialize base downward relationships
   for (const auto* ib : elem_buckets) {
@@ -403,6 +416,9 @@ PromoteElement::populate_elem_node_relations(
       }
     }
   }
+
+  const stk::mesh::BucketVector& node_buckets = mesh.get_buckets(
+    stk::topology::NODE_RANK, selector);
 
   // initialize base upward relationships
   for (const auto* ib : node_buckets) {
@@ -419,8 +435,11 @@ PromoteElement::populate_elem_node_relations(
       }
     }
   }
-
-  unsigned nodes1D = elemDescription.nodes1D;
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::populate_new_elem_node_relations(const NodeRequests& requests)
+{
   for (const auto& request : requests) {
     unsigned numShared = request.sharedElems_.size();
     for (unsigned elemNumber = 0; elemNumber < numShared; ++elemNumber) {
@@ -435,56 +454,63 @@ PromoteElement::populate_elem_node_relations(
       nodeElemMap_.insert({ child, request.sharedElems_ });
     }
   }
-
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::populate_boundary_elem_node_relations(
+  const ElementDescription& elemDescription, stk::mesh::BulkData& mesh,
+  const stk::mesh::Selector& selector, const NodeRequests& requests)
+{
   // Boundaries
-    auto topo = (dimension_ == 2) ?
-        stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
-    const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
-      topo, selector);
+  auto topo = (dimension_ == 2) ?
+      stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
 
-    nodeElemMapBC_.reserve(
-      count_entities(boundary_buckets)*elemDescription_.nodes1D
-    );
+  const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
+    topo, selector
+  );
 
-    std::vector<stk::mesh::Entity> faceNodes(std::pow(nodes1D,dimension_-1));
-    for (const auto* ib : boundary_buckets) {
-      const stk::mesh::Bucket& b = *ib;
-      const stk::mesh::Bucket::size_type length = b.size();
+  auto nodes1D = elemDescription.nodes1D;
+  nodeElemMapBC_.reserve(
+    count_entities(boundary_buckets)*nodes1D
+  );
 
-      for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
-        const auto face = b[k];
+  std::vector<stk::mesh::Entity> faceNodes(std::pow(nodes1D,dimension_-1));
+  for (const auto* ib : boundary_buckets) {
+    const stk::mesh::Bucket& b = *ib;
+    const stk::mesh::Bucket::size_type length = b.size();
 
-        const auto* parent_elems = mesh.begin_elements(face);
-        ThrowAssert(mesh.num_elements(face) == 1);
+    for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
+      const auto face = b[k];
 
-        const auto* face_elem_ords = mesh.begin_element_ordinals(face);
-        const unsigned face_ordinal = face_elem_ords[0];
-        const auto elem_node_rels = elemNodeMap_.at(parent_elems[0]);
-        const auto& nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
+      const auto* parent_elems = mesh.begin_elements(face);
+      ThrowAssert(mesh.num_elements(face) == 1);
 
-        if (dimension_ == 2) {
-          for (unsigned j = 0; j < nodes1D; ++j) {
-            int ordinal = elemDescription_.tensor_product_node_map(j);
-            faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[j]];
-          }
-        }
-        else {
-          for (unsigned j = 0; j < nodes1D; ++j) {
-            for (unsigned i = 0; i < nodes1D; ++i) {
-              int ordinal = elemDescription_.tensor_product_node_map_bc(i,j);;
-              faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[i+nodes1D*j]];
-            }
-          }
-        }
-        elemNodeMap_.insert({face, faceNodes});
+      const auto* face_elem_ords = mesh.begin_element_ordinals(face);
+      const unsigned face_ordinal = face_elem_ords[0];
+      const auto elem_node_rels = elemNodeMap_.at(parent_elems[0]);
+      const auto& nodeOrdinalsForFace = elemDescription.faceNodeMap[face_ordinal];
 
-        for (auto faceNode : faceNodes) {
-          nodeElemMapBC_.insert({faceNode, {face}});
+      if (dimension_ == 2) {
+        for (unsigned j = 0; j < nodes1D; ++j) {
+          int ordinal = elemDescription.tensor_product_node_map(j);
+          faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[j]];
         }
       }
-    }
+      else {
+        for (unsigned j = 0; j < nodes1D; ++j) {
+          for (unsigned i = 0; i < nodes1D; ++i) {
+            int ordinal = elemDescription.tensor_product_node_map_bc(i,j);
+            faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[i+nodes1D*j]];
+          }
+        }
+      }
+      elemNodeMap_.insert({face, faceNodes});
 
-  ThrowAssert(check_elem_node_relations(mesh));
+      for (auto faceNode : faceNodes) {
+        nodeElemMapBC_.insert({faceNode, {face}});
+      }
+    }
+  }
 }
 //--------------------------------------------------------------------------
 bool
@@ -696,7 +722,7 @@ PromoteElement::reorder_ordinals(
   unsigned numAddedNodes1D) const
 {
   // unnecessary if P < 3
-  if (elemDescription_.polyOrder < 3) {
+  if (numAddedNodes1D < 2) {
     return ordinals;
   }
 

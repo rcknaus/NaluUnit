@@ -19,7 +19,7 @@ typedef std::vector<std::vector<size_t>> SubElementConnectivity;
 struct ElementDescription
 {
 public:
-  static std::unique_ptr<ElementDescription> create(int dimension, int order);
+  static std::unique_ptr<ElementDescription> create(int dimension, int order, std::string quadType = "GaussLegendre");
   virtual ~ElementDescription() = default;
 
   inline int tensor_product_node_map(int i, int j, int k) const
@@ -40,6 +40,15 @@ public:
   inline int tensor_product_node_map(int i) const
   {
     return nodeMapBC[i];
+  }
+
+  inline int tensor_index(int nodeNumber) const
+  {
+    const auto& ords = inverseNodeMap[nodeNumber];
+    if (dimension == 2) {
+      return (ords[0] + nodes1D*ords[1]);
+    }
+    return (ords[0] + nodes1D*(ords[1]+nodes1D*ords[2]));
   }
 
   inline double gauss_point_location(
@@ -93,7 +102,7 @@ public:
   AddedNodeLocationsMap locationsForNewNodes;
   SubElementConnectivity subElementConnectivity;
 
-  bool useGLLGLL;
+  std::string quadType;
   unsigned polyOrder;
   unsigned numQuad;
   std::unique_ptr<TensorProductQuadratureRule> quadrature;
@@ -111,7 +120,7 @@ protected:
 struct QuadMElementDescription: public ElementDescription
 {
 public:
-  QuadMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
+  QuadMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc, std::string quadType);
 private:
   void set_node_connectivity();
   void set_subelement_connectivity();
@@ -120,7 +129,7 @@ private:
 struct HexMElementDescription: public ElementDescription
 {
 public:
-  HexMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc);
+  HexMElementDescription(std::vector<double> in_nodeLocs, std::vector<double> in_scsLoc, std::string quadType);
 private:
   void set_node_connectivity();
   void set_subelement_connectivity();
