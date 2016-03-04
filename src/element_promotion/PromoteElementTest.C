@@ -459,7 +459,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior_SGL(
            * Currently, the 2D algorithm doesn't require a map stage in the gather
            * because the underlying ips are in the correct assumed order.  The usual mapping
            * is required for the scatter. The 3D algorithm has the reverse behavior: a mapping
-           * is needed for the gather but not for the gather
+           * is needed for the gather but not for the scatter
            */
 
           quadOp.volume_2D(ws_scv_volume.data(), dnvTensor.data());
@@ -537,7 +537,6 @@ PromoteElementTest::compute_projected_nodal_gradient_interior(
       double scs_error = 0.0;
       meSCS_->determinant(1, ws_coords.data(), ws_areav.data(), &scs_error);
 
-      auto timeA = MPI_Wtime();
       for (int ip = 0; ip < numScsIp; ++ip) {
         const int il = lrscv[2*ip];
         const int ir = lrscv[2*ip+1];

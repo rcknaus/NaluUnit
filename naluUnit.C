@@ -139,7 +139,7 @@ int main( int argc, char ** argv )
     }
   }
 
-  if (doPromotionQuadGaussLegendre) {
+  if (doPromotionQuadSGL) {
     for (int j = 2; j <= maxQuadOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(2, j, quadMesh, "SGL").execute();
     }
