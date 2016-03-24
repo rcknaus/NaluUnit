@@ -14,6 +14,7 @@
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
+#include <superElement/SuperElement.h>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -71,6 +72,14 @@ int main( int argc, char ** argv )
   //==============================
   // create; execute; delete
   //==============================
+
+  // superElement
+  const bool doSuperElement = false;
+  if ( doSuperElement ) {
+    sierra::naluUnit::SuperElement *superElement = new sierra::naluUnit::SuperElement();
+    superElement->execute();
+    delete superElement;
+  }
 
   // overset
   const bool doOverset = false;
