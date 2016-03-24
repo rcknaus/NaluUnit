@@ -91,17 +91,21 @@ public:
   ScalarFieldType *nodeField_;
   VectorFieldType *coordinates_;
 
+  std::string originalBlockName_;
+  std::string superElementPartName_;
+  std::string promotedNodesPartName_;
+
+  // part associated with lower order standard element
+  stk::mesh::Part *originalBlockPart_;
+
   // part associated with super element
   stk::mesh::Part *superElementPart_;
 
-  // in-transit part associated with augmented nodes
-  stk::mesh::Part *superElementAugmentedNodePart_;
-
-  // part associated with lower order standard element
-  stk::mesh::Part *lowerOrderPart_;
+  // in-transit part associated with augmented/promoted nodes
+  stk::mesh::Part *promotedNodesPart_;
 
   // vector of new nodes
-  std::vector<stk::mesh::Entity> superElementAugmentedNodesVec_;
+  std::vector<stk::mesh::Entity> promotedNodesVec_;
 
   // vector of standard nodal ids
   stk::mesh::EntityIdVector connectedNodesIdVec_;

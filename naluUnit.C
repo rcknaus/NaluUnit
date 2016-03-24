@@ -74,7 +74,7 @@ int main( int argc, char ** argv )
   //==============================
 
   // superElement
-  const bool doSuperElement = false;
+  const bool doSuperElement = true;
   if ( doSuperElement ) {
     sierra::naluUnit::SuperElement *superElement = new sierra::naluUnit::SuperElement();
     superElement->execute();

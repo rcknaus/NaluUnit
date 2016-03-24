@@ -48,7 +48,10 @@ SuperElement::SuperElement()
     bulkData_(NULL),
     ioBroker_(NULL),
     nodeField_(NULL),
-    coordinates_(NULL)
+    coordinates_(NULL),
+    originalBlockName_("block_1"),
+    superElementPartName_("block_1_se"),
+    promotedNodesPartName_("block_1_se_n")
 {
   // nothing to do
 }
@@ -70,48 +73,48 @@ void
 SuperElement::execute() 
 {
   NaluEnv::self().naluOutputP0() << "Welcome to the SuperE unit test";
-
-   stk::ParallelMachine pm = NaluEnv::self().parallel_comm();
   
-   // news for mesh constructs
-   metaData_ = new stk::mesh::MetaData();
-   bulkData_ = new stk::mesh::BulkData(*metaData_, pm, activateAura_ ? stk::mesh::BulkData::AUTO_AURA : stk::mesh::BulkData::NO_AUTO_AURA);
-   ioBroker_ = new stk::io::StkMeshIoBroker( pm );
-   ioBroker_->set_bulk_data(*bulkData_);
+  stk::ParallelMachine pm = NaluEnv::self().parallel_comm();
+  
+  // news for mesh constructs
+  metaData_ = new stk::mesh::MetaData();
+  bulkData_ = new stk::mesh::BulkData(*metaData_, pm, activateAura_ ? stk::mesh::BulkData::AUTO_AURA : stk::mesh::BulkData::NO_AUTO_AURA);
+  ioBroker_ = new stk::io::StkMeshIoBroker( pm );
+  ioBroker_->set_bulk_data(*bulkData_);
+  
+  // deal with input mesh
+  ioBroker_->add_mesh_database( "oneElemQuad4.g", stk::io::READ_MESH );
+  ioBroker_->create_input_mesh();
+  
+  // create the part that holds the super element topo; 
+  declare_super_part();
+  
+  // register the fields
+  register_fields();
+  
+  // populate bulk data
+  ioBroker_->populate_bulk_data();
+  
+  // create nodes
+  create_nodes();
+  
+  // create the element
+  create_elements();
+  
+  // deal with output mesh
+  set_output_fields();
+  
+  // safe to set nDim
+  nDim_ = metaData_->spatial_dimension();
+  
+  // extract coordinates
+  coordinates_ = metaData_->get_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates");
+  
+  // initialize nodal fields; define selector (locally owned and ghosted)
+  initialize_fields();
 
-   // deal with input mesh
-   ioBroker_->add_mesh_database( "oneElemQuad4.g", stk::io::READ_MESH );
-   ioBroker_->create_input_mesh();
-
-   // create the part that holds the super element topo; 
-   declare_super_part();
-
-   // register the fields
-   register_fields();
-
-   // populate bulk data
-   ioBroker_->populate_bulk_data();
-
-   // create nodes
-   create_nodes();
-
-   // create the element
-   create_elements();
-
-   // deal with output mesh
-   set_output_fields();
-
-   // safe to set nDim
-   nDim_ = metaData_->spatial_dimension();
- 
-   // extract coordinates
-   coordinates_ = metaData_->get_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates");
-
-   // initialize nodal fields; define selector (locally owned and ghosted)
-   initialize_fields();
-   
-   // output results
-   output_results();
+  // output results
+  output_results();
 }
 
 //--------------------------------------------------------------------------
@@ -120,24 +123,29 @@ SuperElement::execute()
 void
 SuperElement::declare_super_part()
 {
-  // deal with parts
-  std::string partName = "block_1";
-  std::string partNameSE = partName + "_p" ;
-
   // hack for quad9
   const int nodesPerElem = 9;
 
   // create the super topo
   stk::topology superTopo = stk::create_superelement_topology(nodesPerElem);
   
-  // declare part with superTopo
-  superElementPart_ = &metaData_->declare_part_with_topology(partNameSE, superTopo);
-  
+  // two ways to create the part... check both
+  const bool doOld = false;
+  if ( doOld ) {
+    // declare part with superTopo
+    superElementPart_ = &metaData_->declare_part_with_topology(superElementPartName_, superTopo);
+  }
+  else {
+    // declare part with element rank
+    superElementPart_ = &metaData_->declare_part(superElementPartName_, stk::topology::ELEMENT_RANK);
+    stk::mesh::set_topology(*superElementPart_, superTopo);
+  }
+
   // save off lower order part
-  lowerOrderPart_ = metaData_->get_part(partName);
+  originalBlockPart_ = metaData_->get_part(originalBlockName_);
   
   // declare part for nodes
-  superElementAugmentedNodePart_ = &metaData_->declare_part(partNameSE + "_n", stk::topology::NODE_RANK);
+  promotedNodesPart_ = &metaData_->declare_part(promotedNodesPartName_, stk::topology::NODE_RANK);
 }
 
 //--------------------------------------------------------------------------
@@ -156,8 +164,8 @@ SuperElement::create_nodes()
   // declare the entity on this rank (rank is determined by calling declare_entity on this rank)
   for (int i = 0; i < numNodes; ++i) {
     stk::mesh::Entity theNode 
-      = bulkData_->declare_entity(stk::topology::NODE_RANK, availableNodeIds[i], *superElementAugmentedNodePart_);
-    superElementAugmentedNodesVec_.push_back(theNode);
+      = bulkData_->declare_entity(stk::topology::NODE_RANK, availableNodeIds[i], *promotedNodesPart_);
+    promotedNodesVec_.push_back(theNode);
   }
 
   bulkData_->modification_end();
@@ -174,7 +182,7 @@ SuperElement::initialize_node_id_vec()
 
   // define some common selectors
   stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
-    & stk::mesh::Selector(*lowerOrderPart_);
+    & stk::mesh::Selector(*originalBlockPart_);
 
   stk::mesh::BucketVector const& elem_buckets =
     bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
@@ -200,9 +208,9 @@ SuperElement::initialize_node_id_vec()
     }
   }
 
-  // now, add super element augmented nodes
-  for ( size_t k = 0; k < superElementAugmentedNodesVec_.size(); ++k ) {
-    connectedNodesIdVec_.push_back(bulkData_->identifier(superElementAugmentedNodesVec_[k]));
+  // now, add promoted nodes
+  for ( size_t k = 0; k < promotedNodesVec_.size(); ++k ) {
+    connectedNodesIdVec_.push_back(bulkData_->identifier(promotedNodesVec_[k]));
   }
 }
 
@@ -238,17 +246,13 @@ SuperElement::create_elements()
 //--------------------------------------------------------------------------
 void 
 SuperElement::register_fields()
-{
-  // extract the part(s)
-  stk::mesh::Part *targetPart_1 = metaData_->get_part("block_1");
-  stk::mesh::Part *targetPart_1_p = metaData_->get_part("block_1_p");
-        
+{        
   // register nodal fields
   nodeField_ = &(metaData_->declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "node_field"));
     
   // put them on the part
-  stk::mesh::put_field(*nodeField_, *targetPart_1);
-  stk::mesh::put_field(*nodeField_, *targetPart_1_p);
+  stk::mesh::put_field(*nodeField_, *originalBlockPart_);
+  stk::mesh::put_field(*nodeField_, *superElementPart_);
 }
   
 //--------------------------------------------------------------------------
@@ -267,7 +271,39 @@ SuperElement::set_output_fields()
 void
 SuperElement::initialize_fields()
 {
-  // do something
+
+  // just check on whether or not the nodes are all here on the superElementPart_
+  // define some common selectors
+  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*superElementPart_);
+
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get elem
+      stk::mesh::Entity elem = b[k];
+
+      // number of nodes
+      int num_nodes = b.num_nodes(k);
+
+      // relations
+      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+      
+      NaluEnv::self().naluOutputP0() << "... number of nodes: " << num_nodes 
+                                     << " for element " << bulkData_->identifier(elem) << std::endl;
+
+      for ( int ni = 0; ni < num_nodes; ++ni ) {
+        stk::mesh::Entity node = node_rels[ni];
+        NaluEnv::self().naluOutputP0() << "... node id: " << bulkData_->identifier(node) << std::endl;
+      }
+    }
+  }
 }
 
 //--------------------------------------------------------------------------
