@@ -91,12 +91,17 @@ public:
   ScalarFieldType *nodeField_;
   VectorFieldType *coordinates_;
 
-  std::string originalBlockName_;
-  std::string superElementPartName_;
+  // the original [volume] part of the lower order mesh, e.g., block_1, Topo::quad4
+  std::string originalPartName_; 
+
+  // the new volume part for the higher order mesh, e.g., block_1_SE, Topo::superElement
+  std::string superElementPartName_; 
+
+  // the set of nodes that are promoted
   std::string promotedNodesPartName_;
 
   // part associated with lower order standard element
-  stk::mesh::Part *originalBlockPart_;
+  stk::mesh::Part *originalPart_;
 
   // part associated with super element
   stk::mesh::Part *superElementPart_;
