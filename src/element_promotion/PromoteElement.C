@@ -30,6 +30,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <numeric>
 
 namespace sierra{
 namespace naluUnit{
