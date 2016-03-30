@@ -61,8 +61,6 @@ public:
 
   void create_elements();
 
-  void initialize_node_id_vec();
-  
   // register nodal and elemental fields
   void register_fields();
 
@@ -112,8 +110,19 @@ public:
   // vector of new nodes
   std::vector<stk::mesh::Entity> promotedNodesVec_;
 
-  // vector of standard nodal ids
-  stk::mesh::EntityIdVector connectedNodesIdVec_;
+  // hold the unique vector of nodes for each element
+  std::vector<stk::mesh::EntityIdVector> parentElemIds_;
+  
+  // hold the unique vector of nodes for each edge
+  std::vector<stk::mesh::EntityIdVector> parentEdgeIds_;
+  
+  // hold the unique vector of nodes for each face
+  std::vector<stk::mesh::EntityIdVector> parentFaceIds_;
+  
+  // create mapping of parent ids nodes to the new node
+  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentElemNodesMap_;
+  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentEdgeNodesMap_;
+  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentFaceNodesMap_;
 };
 
 } // namespace naluUnit
