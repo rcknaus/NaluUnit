@@ -45,7 +45,8 @@ namespace naluUnit{
 //-------- constructor -----------------------------------------------------
 //--------------------------------------------------------------------------
 SuperElement::SuperElement()
-  : activateAura_(false),
+  : pOrder_(2),
+    activateAura_(false),
     currentTime_(0.0),
     resultsFileIndex_(1),
     nDim_(2),
@@ -264,10 +265,11 @@ SuperElement::create_nodes()
   parentEdgeIds_.erase(pruneEdgeIdsIter, parentEdgeIds_.end());
   parentFaceIds_.erase(pruneFaceIdsIter, parentFaceIds_.end());
 
-  // count the number of promoted nodal ids required; based on parentIds size (which has been sorted); hack for P=2
-  const int pElemFac = 1;
-  const int pEdgeFac = 1;
-  const int pFaceFac = 1;
+  // count the number of promoted nodal ids required; based on parentIds size (which has been sorted)
+  const int pM1Order = pOrder_ - 1;
+  const int pElemFac = std::pow(pM1Order, nDim_);
+  const int pEdgeFac = pM1Order;
+  const int pFaceFac = pM1Order*pM1Order;
   
   const int numPromotedNodes
     = parentElemIds_.size()*pElemFac

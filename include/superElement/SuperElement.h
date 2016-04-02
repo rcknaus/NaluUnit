@@ -73,6 +73,9 @@ public:
   // provide output
   void output_results();
 
+  // what is the order of promotion
+  const int pOrder_;
+  
   // aura on/off
   const bool activateAura_;
 
