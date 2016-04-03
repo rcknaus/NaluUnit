@@ -90,7 +90,15 @@ SuperElement::execute()
   
   // deal with input mesh
   ioBroker_->add_mesh_database( "threeElemQuad4.g", stk::io::READ_MESH );
+
   ioBroker_->create_input_mesh();
+  
+  // safe to set nDim after create_input_mesh; not before
+  nDim_ = metaData_->spatial_dimension();
+
+  // check to make sure that we are supporting
+  if ( nDim_ > 2 || pOrder_ > 2 )
+    throw std::runtime_error("Only 2D P=2 is now supported");
   
   // create the part that holds the super element topo; 
   declare_super_part();
@@ -100,9 +108,6 @@ SuperElement::execute()
   
   // populate bulk data
   ioBroker_->populate_bulk_data();
-  
-  // safe to set nDim
-  nDim_ = metaData_->spatial_dimension();
   
   // extract coordinates
   coordinates_ = metaData_->get_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates");
@@ -129,25 +134,29 @@ SuperElement::execute()
 void
 SuperElement::declare_super_part()
 {
-  // hack for quad9
-  const int nodesPerElem = 9;
+  // set nodes per element; assume quad or hex
+  int nodesPerElem = (pOrder_ + 1)*(pOrder_ + 1);
+  if ( nDim_ > 2)
+    nodesPerElem *= (pOrder_ + 1);
 
   // create the super topo
-  stk::topology superTopo = stk::create_superelement_topology(nodesPerElem);
+  stk::topology superElemTopo = stk::create_superelement_topology(nodesPerElem);
   
-  // two ways to create the part... check both
+  // two ways to create the part... WIP for doOld...
   const bool doOld = false;
   if ( doOld ) {
     // declare part with superTopo
-    superElementPart_ = &metaData_->declare_part_with_topology(superElementPartName_, superTopo);
+    superElementPart_ = &metaData_->declare_part_with_topology(superElementPartName_, superElemTopo);
   }
   else {
     // declare part with element rank
     superElementPart_ = &metaData_->declare_part(superElementPartName_, stk::topology::ELEMENT_RANK);
-    stk::mesh::set_topology(*superElementPart_, superTopo);
-    stk::io::put_io_part_attribute(*superElementPart_);
+    stk::mesh::set_topology(*superElementPart_, superElemTopo);
   }
-
+ 
+  // we want this part to show up in the output mesh
+  stk::io::put_io_part_attribute(*superElementPart_);
+  
   // save off lower order part
   originalPart_ = metaData_->get_part(originalPartName_);
   
