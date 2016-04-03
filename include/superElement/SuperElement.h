@@ -100,6 +100,9 @@ public:
 
   // the set of nodes that are promoted
   std::string promotedNodesPartName_;
+  
+  // verbosity level for output
+  const bool verboseOutput_;
 
   // part associated with lower order standard element
   stk::mesh::Part *originalPart_;

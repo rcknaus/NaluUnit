@@ -57,7 +57,8 @@ SuperElement::SuperElement()
     coordinates_(NULL),
     originalPartName_("block_1"),
     superElementPartName_("block_1_se"),
-    promotedNodesPartName_("block_1_se_n")
+    promotedNodesPartName_("block_1_se_n"),
+    verboseOutput_(false)
 {
   // nothing to do
 }
@@ -559,11 +560,11 @@ void
 SuperElement::initialize_fields()
 {
   // just check on whether or not the nodes are all here on the superElementPart_; define gold standard for three element quad4 mesh
-  int goldNodalOrder[27] = {1, 2, 4, 8, 9, 11, 15, 10, 19,
+  int goldElemNodalOrder[27] = {1, 2, 4, 8, 9, 11, 15, 10, 19,
                           8, 4, 5, 7, 15, 14, 16, 18, 21,
                           7, 5, 3, 6, 16, 12, 13, 17, 20};
-  int goldNodalOrderCount = 0;
-  bool testPasses = true;
+  int goldElemNodalOrderCount = 0;
+  bool testElemPassed = true;
   // define some common selectors
   stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
     & stk::mesh::Selector(*superElementPart_);
@@ -586,8 +587,9 @@ SuperElement::initialize_fields()
       // relations
       stk::mesh::Entity const * node_rels = b.begin_nodes(k);
       
-      NaluEnv::self().naluOutputP0() << "... number of nodes: " << num_nodes 
-                                     << " for element " << bulkData_->identifier(elem) << std::endl;
+      if ( verboseOutput_ )
+        NaluEnv::self().naluOutputP0() << "... number of nodes: " << num_nodes
+                                       << " for element " << bulkData_->identifier(elem) << std::endl;
 
       for ( int ni = 0; ni < num_nodes; ++ni ) {
         stk::mesh::Entity node = node_rels[ni];
@@ -595,29 +597,84 @@ SuperElement::initialize_fields()
         // extract nodes
         double * nodalCoords = stk::mesh::field_data(*coordinates_, node);
       
-        NaluEnv::self().naluOutputP0() << "Node id: " << bulkData_->identifier(node);
-        if ( bulkData_->identifier(node) == goldNodalOrder[goldNodalOrderCount]) {
-          NaluEnv::self().naluOutputP0() << " ......PASSED" << std::endl;
+        if ( verboseOutput_ )
+          NaluEnv::self().naluOutputP0() << "Node id: " << bulkData_->identifier(node);
+        if ( bulkData_->identifier(node) == goldElemNodalOrder[goldElemNodalOrderCount]) {
+          if ( verboseOutput_ )
+            NaluEnv::self().naluOutputP0() << " ......PASSED" << std::endl;
         }
         else {
-          NaluEnv::self().naluOutputP0() << " ......FAILED" << std::endl;
-          testPasses = false;
+          if ( verboseOutput_ )
+            NaluEnv::self().naluOutputP0() << " ......FAILED" << std::endl;
+          testElemPassed = false;
         }
         
-        for ( int j = 0; j < nDim_; ++j )
-          NaluEnv::self().naluOutputP0() << "     coords[" << j << "] " << nodalCoords[j] << std::endl;
+        if ( verboseOutput_ ) {
+          for ( int j = 0; j < nDim_; ++j )
+            NaluEnv::self().naluOutputP0() << "     coords[" << j << "] " << nodalCoords[j] << std::endl;
+        }
+        
         // increment count
-        goldNodalOrderCount++;
+        goldElemNodalOrderCount++;
       }
     }
   }
   NaluEnv::self().naluOutputP0() << std::endl;
   NaluEnv::self().naluOutputP0() << "SuperElement Quad4" << std::endl;
   NaluEnv::self().naluOutputP0() << "------------------" << std::endl;
-  if ( testPasses )
-    NaluEnv::self().naluOutputP0() << "Test PASSED" << std::endl;
+  if ( testElemPassed )
+    NaluEnv::self().naluOutputP0() << "Element Connectivities Test PASSED" << std::endl;
   else
-    NaluEnv::self().naluOutputP0() << "Test FAILED" << std::endl;
+    NaluEnv::self().naluOutputP0() << "Element Connectivities Test FAILED" << std::endl;
+  
+  
+  // now check nodes in the mesh based on super element part (same selector as above)
+  size_t totalNumNodes = 0;
+  size_t goldTotalNumNodes = 21;
+  int goldNodalOrder[21] = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 4, 5, 7, 8, 3, 6, 2, 1};
+ 
+  int goldNodalOrderCount = 0;
+  bool testNodalPassed = true;
+  
+  stk::mesh::BucketVector const& node_buckets =
+  bulkData_->get_buckets(stk::topology::NODE_RANK, s_locally_owned_union );
+  for ( stk::mesh::BucketVector::const_iterator ib = node_buckets.begin();
+       ib != node_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    totalNumNodes += length;
+    
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get node
+      stk::mesh::Entity node = b[k];
+      
+      if ( verboseOutput_ )
+        NaluEnv::self().naluOutputP0() << "node identifier: " << bulkData_->identifier(node) << std::endl;
+      
+      if ( bulkData_->identifier(node) == goldNodalOrder[goldNodalOrderCount] ) {
+        if ( verboseOutput_ )
+          NaluEnv::self().naluOutputP0() << " ......PASSED" << std::endl;
+      }
+      else {
+        if (verboseOutput_ )
+          NaluEnv::self().naluOutputP0() << " ......FAILED" << std::endl;
+        testNodalPassed = false;
+      }
+      
+      // increment count
+      goldNodalOrderCount++;
+    }
+  }
+  
+  if ( totalNumNodes != goldTotalNumNodes )
+    testNodalPassed = false;
+  
+  if ( testNodalPassed )
+    NaluEnv::self().naluOutputP0() << "Nodal iteration Test PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Nodal iteration Test FAILED" << std::endl;
   NaluEnv::self().naluOutputP0() << std::endl;
 }
 
