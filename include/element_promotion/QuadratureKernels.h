@@ -6,7 +6,7 @@
 namespace sierra {
 namespace naluUnit {
 
-  class ElementDescription;
+  struct ElementDescription;
 
   class GLSQuadratureOps
   {

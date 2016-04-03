@@ -56,14 +56,17 @@ public:
 
   // home for super part
   void declare_super_part();
+  void declare_super_part_surface();
 
   void create_nodes();
 
   void create_elements();
-
+  void create_elements_surface();
+  
   // register nodal and elemental fields
   void register_fields();
-
+  void register_fields_surface();
+  
   // declare output mesh and provide list of fields to send to this file
   void set_output_fields();
 
@@ -90,13 +93,18 @@ public:
 
   // fields
   ScalarFieldType *nodeField_;
+  GenericFieldType *elemField_;
+  ScalarFieldType *nodeSurfaceField_;
+  GenericFieldType *surfaceField_;
   VectorFieldType *coordinates_;
 
   // the original [volume] part of the lower order mesh, e.g., block_1, Topo::quad4
   std::string originalPartName_; 
-
+  std::string originalSurfacePartName_;
+  
   // the new volume part for the higher order mesh, e.g., block_1_SE, Topo::superElement
-  std::string superElementPartName_; 
+  std::string superElementPartName_;
+  std::string superElementSurfacePartName_;
 
   // the set of nodes that are promoted
   std::string promotedNodesPartName_;
@@ -106,9 +114,11 @@ public:
 
   // part associated with lower order standard element
   stk::mesh::Part *originalPart_;
+  stk::mesh::Part *originalSurfacePart_;
 
   // part associated with super element
   stk::mesh::Part *superElementPart_;
+  stk::mesh::Part *superElementSurfacePart_;
 
   // in-transit part associated with augmented/promoted nodes
   stk::mesh::Part *promotedNodesPart_;
@@ -129,6 +139,9 @@ public:
   std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentElemNodesMap_;
   std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentEdgeNodesMap_;
   std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentFaceNodesMap_;
+  
+  // mapping of parent element ids to new higher order element
+  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > superElementElemMap_;
 };
 
 } // namespace naluUnit
