@@ -108,20 +108,17 @@ int main( int argc, char ** argv )
   const bool doPromotionHexGaussLegendre = true;
   const bool doPromotionHexSGL = true;
 
-
   const int maxQuadOrder = 7;
   const int maxHexOrder = 7;
 
-  //std::string quadMesh = "test_meshes/2d_1m_P1.g";
+  // The dual nodal volume test assumes a uniform mesh
+  // The projected nodal gradient test should always work
+  // The node count test assumes a uniform mesh with a square/cubic domain on every core
+
   //std::string quadMesh = "test_meshes/1x1_tquad4_R0.g";
   std::string quadMesh = "test_meshes/quad4_64.g";
 
-
   //std::string hexMesh = "test_meshes/thex8_8.g";
-  //std::string hexMesh = "test_meshes/2cm_ped_35K_mks.g";
-  //std::string hexMesh = "test_meshes/1cm_ped_35KR.g";
-  //std::string hexMesh = "test_meshes/100cm_13K_S_R1.g";
-  //std::string hexMesh = "test_meshes/hexLdomain.g";
   std::string hexMesh = "test_meshes/hex8_4.g";
   //==============================
 

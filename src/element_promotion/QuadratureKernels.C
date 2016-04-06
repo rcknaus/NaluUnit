@@ -11,11 +11,18 @@
 namespace sierra {
 namespace naluUnit {
 
-// wrap some of the typical special quadrature operations into a class for ease-of-use
-GLSQuadratureOps::GLSQuadratureOps(const ElementDescription& elem)
+//==========================================================================
+// Class Definition
+//==========================================================================
+// SGLQuadratureOps - Wraps some of the BLAS tools / data used to integrate
+// over surfaces/volumes in 2D/3D using the "Segmented Gauss Lobatto"
+// quadrature
+//===========================================================================
+
+SGLQuadratureOps::SGLQuadratureOps(const ElementDescription& elem)
 : blas_(Teuchos::BLAS<int,double>())
 {
-  std::tie(std::ignore, weightTensor_) =  GLS_quadrature_rule(elem.nodes1D, elem.quadrature->scsEndLoc());
+  std::tie(std::ignore, weightTensor_) =  SGL_quadrature_rule(elem.nodes1D, elem.quadrature->scsEndLoc());
   weightMatrix_.resize(elem.nodesPerElement*elem.nodesPerElement);
   work2D_.resize(elem.nodes1D*elem.nodes1D);
 
@@ -25,14 +32,16 @@ GLSQuadratureOps::GLSQuadratureOps(const ElementDescription& elem)
   p_weightTensor_ = weightTensor_.data();
   p_work2D_ = work2D_.data();
 
+  // For 3D volume integrals, the weights are saved to a large N^3 x N^3 matrix
+  // where N is the number of nodes in 1D
   if (elem.dimension == 3) {
     for (unsigned q = 0; q < elem.nodesPerElement; ++q) {
       const auto& lmn = elem.inverseNodeMap[q];
       for (unsigned p = 0; p < elem.nodesPerElement; ++p) {
         const auto& ijk = elem.inverseNodeMap[p];
-        weightMatrix_[p + q * elem.nodesPerElement] = weightTensor_[ijk[0] + lmn[0] * elem.nodes1D]
-                                                    * weightTensor_[ijk[1] + lmn[1] * elem.nodes1D]
-                                                    * weightTensor_[ijk[2] + lmn[2] * elem.nodes1D];
+        weightMatrix_[p + q * elem.nodesPerElement] = weightTensor_[ijk[0] * elem.nodes1D + lmn[0]]
+                                                    * weightTensor_[ijk[1] * elem.nodes1D + lmn[1]]
+                                                    * weightTensor_[ijk[2] * elem.nodes1D + lmn[2]];
       }
     }
     p_weightMatrix_ = weightMatrix_.data();
@@ -40,10 +49,14 @@ GLSQuadratureOps::GLSQuadratureOps(const ElementDescription& elem)
 }
 //--------------------------------------------------------------------------
 void
-GLSQuadratureOps::volume_2D(
+SGLQuadratureOps::volume_2D(
   const double* nodalValuesTensor,
   double* result)
 {
+  /* Computes
+   * \bar{\phi}_{lm} = \sum_m^n \sum_l^n \sum_j^n \sum_i W_{mj} W_{li} phi_{ij}
+   */
+
   blas_.GEMM(
     Teuchos::NO_TRANS,
     Teuchos::NO_TRANS,
@@ -68,29 +81,44 @@ GLSQuadratureOps::volume_2D(
 }
 //--------------------------------------------------------------------------
 void
-GLSQuadratureOps::volume_3D(
+SGLQuadratureOps::volume_3D(
   const double*  nodalValues,
   double* result)
 {
-  // TODO(rcknaus):
-  // This can be computed with fewer flops by using a sequence of smaller
-  // matrix-matrix multiplications.  For now, just do a big matvec.
-  // This approach might be better with thread-level parallelism despite
-  // the increased operation count
+  /* Computes
+   * \bar{\phi}_{lmn} = \sum_n^N \sum_m^N \sum_l^N
+   *                    \sum_k^N \sum_j^N \sum_i^N W_{nk} W_{mj} W_{li} phi_{ijk}
+   *
+   * Or, more directly,
+   * \bar{phi}_q = \sum^{N^3}_{qp} \tilde{W}_{qp} \phi_p
+   *
+   * TODO(rcknaus):
+   * This can be computed with fewer flops by using a sequence of smaller
+   * matrix-matrix multiplications.  For now, just do a big matvec.
+   * This approach might be better with thread-level parallelism despite
+   * the increased operation count
+   */
 
   blas_.GEMV(
-    Teuchos::TRANS,
+    Teuchos::NO_TRANS,
     nodesPerElement_, nodesPerElement_, 1.0, p_weightMatrix_,
     nodesPerElement_, nodalValues, 1, 0.0,
     result, 1
   );
 }
 //--------------------------------------------------------------------------
-void GLSQuadratureOps::surface_2D(
+void SGLQuadratureOps::surface_2D(
   const double*  integrand,
   double* result,
   int line_offset)
 {
+  /* Computes a line integral for each of the  N cv segments along a subcontrol line
+   * $\bar{\phi}_l = \sum_l^N \sum_\alpha W_{l \alpha} phi_{\alpha}$
+   *
+   * where greek indices indicate integration point indices
+   * and roman indices are nodal indices
+   */
+
   blas_.GEMV(
     Teuchos::TRANS,
     nodes1D_, nodes1D_,
@@ -103,11 +131,19 @@ void GLSQuadratureOps::surface_2D(
 }
 //--------------------------------------------------------------------------
 void
-GLSQuadratureOps::surface_3D(
+SGLQuadratureOps::surface_3D(
   const double* __restrict__ integrand,
   double* __restrict__ result,
   int face_offset)
 {
+  /* Computes a surface integral for each of the N*N cv surfaces along a subcontrol plane
+   * \bar{\phi}_lm = \sum_m^n \sum_l^n
+   *                 \sum_\beta^n \sum_\alpha W_{m \beta} W_{l \alpha} phi_{\alpha \beta}
+   *
+   * where greek indices indicate integration point indices
+   * and roman indices are nodal indices
+   */
+
   blas_.GEMM(
     Teuchos::NO_TRANS,
     Teuchos::NO_TRANS,

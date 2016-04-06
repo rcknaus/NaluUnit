@@ -11,6 +11,7 @@
 #include <element_promotion/MasterElement.h>
 #include <element_promotion/MasterElementHO.h>
 #include <element_promotion/PromoteElement.h>
+#include <element_promotion/PromotedPartHelper.h>
 #include <element_promotion/PromotedElementIO.h>
 #include <element_promotion/QuadratureRule.h>
 #include <element_promotion/TensorProductQuadratureRule.h>
@@ -84,14 +85,13 @@ PromoteElementTest::execute()
     elemType_ = "Hex" + std::to_string(nodes);
   }
   coarseOutputName_ = "test_output/coarse_output/coarse_" + elemType_ + ".e";
+  restartName_ = "test_output/" + elemType_ + ".rs";
   fineOutputName_   = "test_output/fine_output/fine_" + elemType_ + ".e";
 
   NaluEnv::self().naluOutputP0() << "Promoting to a '" << elemType_
                                  << "' Element with quadrature type '" << quadType_ << "' ..."
                                  <<   std::endl;
   NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
-
-  std::map<bool, std::string> passFail = { {false,"FAIL"}, {true, "PASS"} };
 
   elem_ = ElementDescription::create(nDim_, order_, quadType_);
   ThrowRequire(elem_ != nullptr);
@@ -114,8 +114,7 @@ PromoteElementTest::execute()
   promoteElement_->promote_elements(
     originalPartVector_,
     *coordinates_,
-    *bulkData_,
-    promotedPartVector_
+    *bulkData_
   );
   bulkData_->modification_end();
   auto timeD = MPI_Wtime();
@@ -225,7 +224,7 @@ PromoteElementTest::create_master_boundary_element(const ElementDescription& ele
 void
 PromoteElementTest::compute_dual_nodal_volume()
 {
-  auto selector = stk::mesh::selectUnion(originalPartVector_)
+  auto selector = stk::mesh::selectUnion(superElemPartVector_)
                 & metaData_->locally_owned_part();
 
   if (quadType_ == "SGL") {
@@ -244,7 +243,10 @@ PromoteElementTest::compute_dual_nodal_volume()
 void
 PromoteElementTest::compute_projected_nodal_gradient()
 {
-  auto selector = stk::mesh::selectUnion(originalPartVector_)
+  auto interiorSelector = stk::mesh::selectUnion(superElemPartVector_)
+                & metaData_->locally_owned_part();
+
+  auto boundarySelector = stk::mesh::selectUnion(originalPartVector_)
                 & metaData_->locally_owned_part();
 
   unsigned numRuns = 1;
@@ -256,16 +258,16 @@ PromoteElementTest::compute_projected_nodal_gradient()
 
     if (quadType_ == "SGL") {
       auto timeA = MPI_Wtime();
-      compute_projected_nodal_gradient_interior_SGL(selector);
-      compute_projected_nodal_gradient_boundary_SGL(selector);
+      compute_projected_nodal_gradient_interior_SGL(interiorSelector);
+      compute_projected_nodal_gradient_boundary_SGL(boundarySelector);
       auto timeB = MPI_Wtime();
 
       totalTime += (timeB - timeA);
     }
     else {
       auto timeA = MPI_Wtime();
-      compute_projected_nodal_gradient_interior(selector);
-      compute_projected_nodal_gradient_boundary(selector);
+      compute_projected_nodal_gradient_interior(interiorSelector);
+      compute_projected_nodal_gradient_boundary(boundarySelector);
       auto timeB = MPI_Wtime();
 
       totalTime += (timeB - timeA);
@@ -311,7 +313,7 @@ PromoteElementTest::check_node_count(unsigned polyOrder, unsigned originalNodeCo
   }
 
   if (allNodes != totalNodes) {
-    std::cout << "all nodes " << allNodes << " total Nodes " << totalNodes << std::endl;
+    NaluEnv::self().naluOutputP0() << "all nodes " << allNodes << " total Nodes " << totalNodes << std::endl;
     return false;
   }
 
@@ -361,9 +363,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior(
       const stk::mesh::Bucket & b = *ib;
       const stk::mesh::Bucket::size_type length = b.size();
       for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
-        stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(b,
-          k);
-
+        stk::mesh::Entity const* node_rels = b.begin_nodes(k);
         for (int ni = 0; ni < nodesPerElement; ++ni) {
           const stk::mesh::Entity node = node_rels[ni];
           const double* const coords = static_cast<double*>(stk::mesh::field_data(
@@ -420,7 +420,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior_SGL(
   auto blas = Teuchos::BLAS<int, double>();
   std::vector<double> dnvTensor(nodesPerElement,0.0);
   std::vector<double> temp(nodesPerElement,0.0);
-  auto quadOp = GLSQuadratureOps(*elem_);
+  auto quadOp = SGLQuadratureOps(*elem_);
 
   std::vector<double> dnvVector(nodesPerElement,0.0); // forward mapped dnv
   std::vector<double> dnvResult(nodesPerElement,0.0); // result
@@ -437,7 +437,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior_SGL(
       const stk::mesh::Bucket & b = *ib ;
       const stk::mesh::Bucket::size_type length = b.size();
       for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
-        stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(b,k);
+        stk::mesh::Entity const* node_rels = b.begin_nodes(k);
 
         for (int ni = 0; ni < nodesPerElement; ++ni) {
           const stk::mesh::Entity node = node_rels[ni];
@@ -516,7 +516,7 @@ PromoteElementTest::compute_projected_nodal_gradient_interior(
 
     for (size_t k = 0; k < length; ++k) {
 
-      const auto* node_rels = promoteElement_->begin_nodes_all(b, k);
+      const auto* node_rels = b.begin_nodes(k);
 
       for (int ni = 0; ni < nodesPerElement; ++ni) {
         stk::mesh::Entity node = node_rels[ni];
@@ -592,7 +592,8 @@ PromoteElementTest::compute_projected_nodal_gradient_boundary(
     meBC_->shape_fcn(ws_shape_function.data());
 
     for (size_t k = 0; k < length; ++k) {
-      const auto* face_node_rels = promoteElement_->begin_nodes_all(b, k);
+      //TODO(rcknaus): still need to route around stk for boundary contributions
+      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
 
       for (int ni = 0; ni < nodesPerFace; ++ni) {
         stk::mesh::Entity node = face_node_rels[ni];
@@ -650,7 +651,7 @@ PromoteElementTest::compute_projected_nodal_gradient_interior_SGL(stk::mesh::Sel
   int ipsPerFace = (nDim_ == 2) ? nodes1D : nodes1D*nodes1D;
 
   int dimension = meSCS_->nDim_;
-  auto quadOp = GLSQuadratureOps{*elem_};
+  auto quadOp = SGLQuadratureOps{*elem_};
 
   auto timeA = MPI_Wtime();
   const auto& elem_buckets = bulkData_->get_buckets(stk::topology::ELEM_RANK, selector);
@@ -676,7 +677,7 @@ PromoteElementTest::compute_projected_nodal_gradient_interior_SGL(stk::mesh::Sel
     std::vector<double> integrated_result(numScsIp*nDim_);
 
     for (size_t k = 0; k < length; ++k) {
-      const auto* node_rels = promoteElement_->begin_nodes_all(b, k);
+      const auto* node_rels = b.begin_nodes(k);
 
       for (int ni = 0; ni < nodesPerElement; ++ni) {
         stk::mesh::Entity node = node_rels[ni];
@@ -783,12 +784,13 @@ PromoteElementTest::compute_projected_nodal_gradient_boundary_SGL(
     std::vector<double> integrand(numScsIp*nDim_);
     std::vector<double> integrated_result(numScsIp*nDim_);
 
-    auto quadOp = GLSQuadratureOps{*elem_};
+    auto quadOp = SGLQuadratureOps{*elem_};
     auto blas = Teuchos::BLAS<int, double>();
     int nodesPerElement = meBC_->nodesPerElement_;
 
     for (size_t k = 0; k < length; ++k) {
-      const auto* face_node_rels = promoteElement_->begin_nodes_all(b, k);
+      //TODO(rcknaus): still need to route around stk for boundary contributions
+      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
 
       for (int ni = 0; ni < nodesPerFace; ++ni) {
         stk::mesh::Entity node = face_node_rels[ni];
@@ -862,13 +864,13 @@ void
 PromoteElementTest::dump_coords()
 {
   stk::mesh::BucketVector const& elem_buckets =
-      bulkData_->get_buckets(stk::topology::ELEM_RANK, metaData_->universal_part());
+      bulkData_->get_buckets(stk::topology::ELEM_RANK, stk::mesh::selectUnion(superElemPartVector_));
   for (const auto ib : elem_buckets ) {
     stk::mesh::Bucket & b = *ib ;
     const stk::mesh::Bucket::size_type length = b.size();
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       const auto elem = b[k];
-      stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(elem);
+      stk::mesh::Entity const* node_rels = b.begin_nodes(k);
 
       std::cout << "Coords for elem " << bulkData_->identifier(elem) << ": ";
       for (size_t node = 0; node < elem_->nodes1D; ++node) {
@@ -916,7 +918,7 @@ PromoteElementTest::determine_mesh_spacing()
         if (meshSpacing < 0.0) {
           meshSpacing = dist;
         }
-        else if (meshSpacing != dist) {
+        else if (!is_near(meshSpacing,dist, defaultFloatingPointTolerance_)) {
           isUniform = false;
         }
 
@@ -947,7 +949,7 @@ PromoteElementTest::determine_mesh_spacing()
     }
   }
   if (!isUniform) {
-    std::cout <<
+    NaluEnv::self().naluOutputP0() <<
         "Warning: DNV and Node counts tests assume that the mesh is uniform.  Tests will definitely fail."
              << std::endl;
   }
@@ -972,7 +974,7 @@ PromoteElementTest::check_projected_nodal_gradient()
   std::vector<double> zeroVec(nDim_,0.0);
   std::vector<double> ws_dqdx(nDim_);
 
-  stk::mesh::Selector s_all_entities = metaData_->universal_part();
+  stk::mesh::Selector s_all_entities = metaData_->universal_part(); // all nodes
   stk::mesh::BucketVector const& node_buckets =
       bulkData_->get_buckets( stk::topology::NODE_RANK, s_all_entities );
   for (const auto ib : node_buckets ) {
@@ -1022,14 +1024,13 @@ PromoteElementTest::check_dual_nodal_volume_quad()
   bool testPassed = false;
 
   stk::mesh::BucketVector const& elem_buckets =
-      bulkData_->get_buckets(stk::topology::ELEM_RANK, metaData_->universal_part());
+      bulkData_->get_buckets(stk::topology::ELEM_RANK, stk::mesh::selectUnion(superElemPartVector_));
   for (const auto* ib : elem_buckets ) {
     const stk::mesh::Bucket & b = *ib ;
     const stk::mesh::Bucket::size_type length = b.size();
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      auto elem  = b[k];
-      stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(elem);
-      for (unsigned j = 0; j < promoteElement_->num_nodes(elem); ++j) {
+      stk::mesh::Entity const* node_rels = b.begin_nodes(k);
+      for (unsigned j = 0; j < b.num_nodes(k); ++j) {
         const double dualNodalVolume = *stk::mesh::field_data(*dualNodalVolume_,node_rels[j]);
         const auto num_elems = *stk::mesh::field_data(*sharedElems_, node_rels[j]);
         double exact = num_elems*exactDualNodalVolume[j];
@@ -1066,14 +1067,13 @@ PromoteElementTest::check_dual_nodal_volume_hex()
     bool testPassed = false;
 
     stk::mesh::BucketVector const& elem_buckets =
-        bulkData_->get_buckets(stk::topology::ELEM_RANK, metaData_->universal_part());
+        bulkData_->get_buckets(stk::topology::ELEM_RANK, stk::mesh::selectUnion(superElemPartVector_));
     for (const auto* ib : elem_buckets ) {
       const stk::mesh::Bucket & b = *ib ;
       const stk::mesh::Bucket::size_type length = b.size();
       for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-        auto elem  = b[k];
-        stk::mesh::Entity const* node_rels = promoteElement_->begin_nodes_all(elem);
-        for (unsigned j = 0; j < promoteElement_->num_nodes(elem); ++j) {
+        stk::mesh::Entity const* node_rels = b.begin_nodes(k);
+        for (unsigned j = 0; j < b.num_nodes(k); ++j) {
           const double dualNodalVolume = *stk::mesh::field_data(*dualNodalVolume_,node_rels[j]);
           const auto num_elems = *stk::mesh::field_data(*sharedElems_, node_rels[j]);
           double exact = num_elems*exactDualNodalVolume[j];
@@ -1100,11 +1100,40 @@ PromoteElementTest::register_fields()
   std::vector<std::string> promotedNames;
 
   // save space for parts of the input mesh
-  for (auto& targetName : targetNames) {
-    std::string promotedName = targetName + "_promoted";
+  for (auto& baseName : targetNames) {
+    std::string promotedName = promote_part_name(baseName);
 
-    stk::mesh::Part* targetPart = metaData_->get_part(targetName);
-    stk::mesh::Part* promotedPart = &metaData_->declare_part(promotedName);
+    stk::mesh::Part* targetPart = metaData_->get_part(baseName);
+
+    stk::mesh::Part* superElemPart = nullptr;
+    if (targetPart->topology().rank() == stk::topology::ELEM_RANK) {
+      /* TODO(rcknaus): use this style after stk bug fix is pushed to Trilinos
+       *
+       *  superElemPart = &metaData_->declare_part_with_topology(
+       *       super_element_part_name(targetName),
+       *       stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
+       *  );
+       */
+
+
+      superElemPart = &metaData_->declare_part(
+        super_element_part_name(baseName),
+        stk::topology::ELEMENT_RANK
+      );
+
+      stk::mesh::set_topology(
+        *superElemPart,
+        stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
+      );
+
+
+      stk::io::put_io_part_attribute(*superElemPart);
+
+      superElemPartVector_.push_back(superElemPart);
+    }
+
+    stk::mesh::Part* promotedPart = &metaData_->declare_part(promotedName, stk::topology::NODE_RANK);
+
 
     // extract the parts
     originalPartVector_.push_back(targetPart);
@@ -1115,32 +1144,42 @@ PromoteElementTest::register_fields()
       stk::topology::NODE_RANK, "dual_nodal_volume"));
     stk::mesh::put_field(*dualNodalVolume_, *targetPart);
     stk::mesh::put_field(*dualNodalVolume_, *promotedPart);
-
-    detJ_ = &(metaData_->declare_field<ScalarFieldType>(
-      stk::topology::NODE_RANK, "det_j"));
-    stk::mesh::put_field(*detJ_, *targetPart);
-    stk::mesh::put_field(*detJ_, *promotedPart);
+    if (superElemPart != nullptr) {
+      stk::mesh::put_field(*dualNodalVolume_, *superElemPart);
+    }
 
     coordinates_ = &(metaData_->declare_field<VectorFieldType>(
       stk::topology::NODE_RANK, "coordinates"));
     stk::mesh::put_field(*coordinates_,*targetPart, nDim_);
     stk::mesh::put_field(*coordinates_,*promotedPart, nDim_);
+    if (superElemPart != nullptr) {
+      stk::mesh::put_field(*coordinates_,*superElemPart, nDim_);
+    }
 
     dqdx_ = &(metaData_->declare_field<VectorFieldType>(
        stk::topology::NODE_RANK, "dqdx"));
      stk::mesh::put_field(*dqdx_,*targetPart, nDim_);
      stk::mesh::put_field(*dqdx_,*promotedPart, nDim_);
+     if (superElemPart != nullptr) {
+       stk::mesh::put_field(*dqdx_, *superElemPart, nDim_);
+     }
 
     // slightly helpful for checking dual nodal volume
     sharedElems_ = &(metaData_->declare_field<ScalarIntFieldType>(
       stk::topology::NODE_RANK, "elements_shared"));
     stk::mesh::put_field(*sharedElems_, *targetPart);
     stk::mesh::put_field(*sharedElems_, *promotedPart);
+    if (superElemPart != nullptr) {
+      stk::mesh::put_field(*sharedElems_, *superElemPart);
+    }
 
     q_ = &(metaData_->
         declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
     stk::mesh::put_field(*q_, *targetPart);
     stk::mesh::put_field(*q_, *promotedPart);
+    if (superElemPart != nullptr) {
+      stk::mesh::put_field(*q_, *superElemPart);
+    }
    }
 }
 //--------------------------------------------------------------------------
@@ -1148,15 +1187,19 @@ void
 PromoteElementTest::set_output_fields()
 {
   resultsFileIndex_ =
-      ioBroker_->create_output_mesh(coarseOutputName_, stk::io::WRITE_RESULTS );
+      ioBroker_->create_output_mesh(coarseOutputName_, stk::io::WRITE_RESULTS);
+
+  restartFileIndex_ =
+      ioBroker_->create_output_mesh(restartName_, stk::io::WRITE_RESTART);
 
   ioBroker_->add_field(resultsFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
+  ioBroker_->add_field(restartFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
 
   promoteIO_ = make_unique<PromotedElementIO>(
-    *promoteElement_,
+    *elem_,
     *metaData_,
     *bulkData_,
-    *coordinates_,
+    originalPartVector_,
     fineOutputName_
   );
 
@@ -1175,13 +1218,11 @@ PromoteElementTest::initialize_fields()
     stk::mesh::Bucket & b = *ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     double* dualNodalVolume = stk::mesh::field_data(*dualNodalVolume_, b);
-    double* detJ = stk::mesh::field_data(*detJ_, b);
     double* q = stk::mesh::field_data(*q_, b);
     double* dqdx = stk::mesh::field_data(*dqdx_, b);
     double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       dualNodalVolume[k] = 0.0;
-      detJ[k] = 0.0;
       if (constScalarField_) {
         q[k] = 1.0;
       }
@@ -1243,6 +1284,7 @@ void
 PromoteElementTest::output_results()
 {
   ioBroker_->process_output_request(resultsFileIndex_, currentTime_);
+  ioBroker_->process_output_request(restartFileIndex_, currentTime_);
   promoteIO_->write_database_data(currentTime_);
 }
 //--------------------------------------------------------------------------

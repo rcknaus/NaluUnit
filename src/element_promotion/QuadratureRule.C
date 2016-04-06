@@ -269,7 +269,7 @@ subinterval_weights_for_fixed_abscissae(
 
 //--------------------------------------------------------------------
 std::pair<std::vector<double>, std::vector<double>>
-GLS_quadrature_rule(
+SGL_quadrature_rule(
   int order,
   std::vector<double> scsEndLocations)
 {

@@ -29,6 +29,15 @@ namespace naluUnit{
 
 //==========================================================================
 // MasterElementHOTests - a set of tests for higher order master elements
+//
+// Interpolation test: Interpolate a random polynomials of order p to random
+// points within a square/cube element
+//
+// Derivative test: Take derivatives of random polynomials of order p at random
+// points within a square/cube element
+//
+// Quadrature test: Integrate random polynomials of order p over the sub-cvs
+// of a square/cube element
 //==========================================================================
 MasterElementHOTest::MasterElementHOTest(int dim, int maxOrder)
 : nDim_(dim),
@@ -43,46 +52,48 @@ MasterElementHOTest::execute()
   NaluEnv::self().naluOutputP0() << "Master Element Unit Tests for order '" << polyOrder_ << "'"<< std::endl;
   NaluEnv::self().naluOutputP0() << "-------------------------" << std::endl;
 
+  unsigned numTrials = 10; // number of random polynomials to interpolate/compute derivatives/integrate
+
+  unsigned numIps = 20;    // number of randomly sampled points at which to interpolate/compute derivatives
+
+  double tol = 1.0e-12;    // floating point tolerance (polynomial coeffs ~ order 1)
+                           // Derivatives for higher polynomial orders (~10) will sometimes fail
+                           // with this tolerance
+
   if (nDim_ == 2) {
     elem_ = ElementDescription::create(2, polyOrder_, "GaussLegendre");
-    output_result("GLElement Interpolation 2D ", check_interpolation_quad());
-    output_result("GLElement Derivative 2D    ", check_derivative_quad());
-    output_result("GLElement Quadrature 2D    ", check_volume_quadrature_quad());
+    output_result("GLElement Interpolation 2D ", check_interpolation_quad(numTrials, numIps, tol));
+    output_result("GLElement Derivative 2D    ", check_derivative_quad(numTrials, numIps, tol));
+    output_result("GLElement Quadrature 2D    ", check_volume_quadrature_quad(numTrials,  tol));
 
     elem_ = ElementDescription::create(2, polyOrder_, "SGL");
-    output_result("SGLElement Interpolation 2D", check_interpolation_quad());
-    output_result("SGLElement Derivative 2D   ", check_derivative_quad());
-    output_result("SGLElement Quadrature 2D   ", check_volume_quadrature_quad_SGL());
+    output_result("SGLElement Interpolation 2D", check_interpolation_quad(numTrials, numIps, tol));
+    output_result("SGLElement Derivative 2D   ", check_derivative_quad(numTrials, numIps, tol));
+    output_result("SGLElement Quadrature 2D   ", check_volume_quadrature_quad_SGL(numTrials, tol));
   }
 
   if (nDim_ == 3) {
     elem_ = ElementDescription::create(3, polyOrder_, "GaussLegendre");
-    output_result("GLElement Interpolation 2D ", check_interpolation_hex());
-    output_result("GLElement Derivative 2D    ", check_derivative_hex());
-    output_result("GLElement Quadrature 2D    ", check_volume_quadrature_hex());
+    output_result("GLElement Interpolation 3D ", check_interpolation_hex(numTrials, numIps, tol));
+    output_result("GLElement Derivative 3D    ", check_derivative_hex(numTrials, numIps, tol));
+    output_result("GLElement Quadrature 3D    ", check_volume_quadrature_hex(numTrials, tol));
 
     elem_ = ElementDescription::create(3, polyOrder_, "SGL");
-    output_result("SGLElement Interpolation 2D", check_interpolation_hex());
-    output_result("SGLElement Derivative 2D   ", check_derivative_hex());
-    output_result("SGLElement Quadrature 2D   ", check_volume_quadrature_hex_SGL());
+    output_result("SGLElement Interpolation 3D", check_interpolation_hex(numTrials, numIps, tol));
+    output_result("SGLElement Derivative 3D   ", check_derivative_hex(numTrials, numIps, tol));
+    output_result("SGLElement Quadrature 3D   ", check_volume_quadrature_hex_SGL(numTrials,  tol));
   }
 
   NaluEnv::self().naluOutputP0() << "-------------------------" << std::endl;
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_interpolation_quad()
+MasterElementHOTest::check_interpolation_quad(unsigned numTrials, unsigned numIps, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and interpolate to a vector of random points
   // (between -1.05 and 1.05 to check edges)
   bool testPassed = false;
-  unsigned numIps = 100;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-10;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -142,6 +153,8 @@ MasterElementHOTest::check_interpolation_quad()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Interpolation Test failed with max error: "
+                                     << max_error(approxInterp,exactInterp) << std::endl;
       return false;
     }
   }
@@ -149,18 +162,12 @@ MasterElementHOTest::check_interpolation_quad()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_interpolation_hex()
+MasterElementHOTest::check_interpolation_hex(unsigned numTrials, unsigned numIps, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and interpolate to a vector of random points
   // (between -1.05 and 1.05 to check edges)
   bool testPassed = false;
-  unsigned numIps = 100;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-10;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -226,6 +233,8 @@ MasterElementHOTest::check_interpolation_hex()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Interpolation Test failed with max error: "
+                                     << max_error(approxInterp,exactInterp) << std::endl;
       return false;
     }
   }
@@ -233,18 +242,12 @@ MasterElementHOTest::check_interpolation_hex()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_derivative_quad()
+MasterElementHOTest::check_derivative_quad(unsigned numTrials, unsigned numIps, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and compute derivatives at a vector of random points
   // (between -1.05 and 1.05 to check edges)
   bool testPassed = false;
-  unsigned numIps = 100;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-10;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -307,6 +310,8 @@ MasterElementHOTest::check_derivative_quad()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Derivative Test failed with max error: "
+                                     << max_error(approxDeriv,exactDeriv) << std::endl;
       return false;
     }
   }
@@ -314,18 +319,12 @@ MasterElementHOTest::check_derivative_quad()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_derivative_hex()
+MasterElementHOTest::check_derivative_hex(unsigned numTrials, unsigned numIps, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and compute derivatives at a vector of random points
   // (between -1.05 and 1.05 to check edges)
   bool testPassed = false;
-  unsigned numIps = 100;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-8;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -402,6 +401,8 @@ MasterElementHOTest::check_derivative_hex()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Derivative Test failed with max error: "
+                                     << max_error(approxDeriv,exactDeriv) << std::endl;
       return false;
     }
   }
@@ -409,16 +410,11 @@ MasterElementHOTest::check_derivative_hex()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_volume_quadrature_quad()
+MasterElementHOTest::check_volume_quadrature_quad(unsigned numTrials, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and integrate the polynomial over the dual nodal volumes
   bool testPassed = false;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-10;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -471,11 +467,14 @@ MasterElementHOTest::check_volume_quadrature_quad()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Quadrature Test failed with max error: "
+                                     << max_error(approxInt,exactInt) << std::endl;
       return false;
     }
   }
 
   if (outputTiming_) {
+
     NaluEnv::self().naluOutputP0() << "Average time for volume integration loop: "
         << totalTime / numTrials << std::endl;
   }
@@ -484,16 +483,11 @@ MasterElementHOTest::check_volume_quadrature_quad()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_volume_quadrature_hex()
+MasterElementHOTest::check_volume_quadrature_hex(unsigned numTrials, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and integrate the polynomial over the dual nodal volumes
   bool testPassed = false;
-  unsigned numTrials = 100;
-
-  // for higher P, there seems to be quite a lot of floating point
-  // error assoc. with these tests
-  double tol = 1.0e-10;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -552,6 +546,8 @@ MasterElementHOTest::check_volume_quadrature_hex()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Quadrature Test failed with max error: "
+                                     << max_error(approxInt,exactInt) << std::endl;
       return false;
     }
   }
@@ -565,14 +561,11 @@ MasterElementHOTest::check_volume_quadrature_hex()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_volume_quadrature_quad_SGL()
+MasterElementHOTest::check_volume_quadrature_quad_SGL(unsigned numTrials, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and integrate the polynomial over the dual nodal volumes
   bool testPassed = false;
-  unsigned numTrials = 100;
-
-  double tol = 1.0e-12;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -589,7 +582,7 @@ MasterElementHOTest::check_volume_quadrature_quad_SGL()
   std::vector<double> approxIntTensor(elem_->nodesPerElement, 0.0);
 
   auto blas = Teuchos::BLAS<int,double>();
-  auto quadOp = GLSQuadratureOps(*elem_);
+  auto quadOp = SGLQuadratureOps(*elem_);
   int nodes1D = elem_->nodes1D;
 
   std::vector<double> temp(elem_->nodesPerElement,0.0);
@@ -646,6 +639,8 @@ MasterElementHOTest::check_volume_quadrature_quad_SGL()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Quadrature Test failed with max error: "
+                                     << max_error(approxInt,exactInt) << std::endl;
       return false;
     }
   }
@@ -659,14 +654,11 @@ MasterElementHOTest::check_volume_quadrature_quad_SGL()
 }
 //--------------------------------------------------------------------------
 bool
-MasterElementHOTest::check_volume_quadrature_hex_SGL()
+MasterElementHOTest::check_volume_quadrature_hex_SGL(unsigned numTrials, double tol)
 {
   // create a (-1,1) x (-1,1) element filled with polynomial values
   // and integrate the polynomial over the dual nodal volumes
   bool testPassed = false;
-  unsigned numTrials = 100;
-
-  double tol = 1.0e-12;
 
   std::mt19937 rng;
   rng.seed(std::random_device()());
@@ -687,7 +679,7 @@ MasterElementHOTest::check_volume_quadrature_hex_SGL()
   int nodes1D = elem_->nodes1D;
   int nodes2D = nodes1D*nodes1D;
 
-  auto quadOp = GLSQuadratureOps(*elem_);
+  auto quadOp = SGLQuadratureOps(*elem_);
   std::vector<double> temp1(nodes2D, 0.0);
   std::vector<double> temp2(nodes2D, 0.0);
 
@@ -743,6 +735,8 @@ MasterElementHOTest::check_volume_quadrature_hex_SGL()
       testPassed = true;
     }
     else {
+      NaluEnv::self().naluOutputP0() << "Quadrature Test failed with max error: "
+                                     << max_error(approxInt,exactInt) << std::endl;
       return false;
     }
   }

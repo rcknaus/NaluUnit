@@ -130,6 +130,7 @@ public:
   const bool activateAura_;
   const double currentTime_;
   size_t resultsFileIndex_;
+  size_t restartFileIndex_;
   const std::string meshName_;
   const double defaultFloatingPointTolerance_;
 
@@ -144,6 +145,8 @@ public:
   std::string elemType_;
   std::string coarseOutputName_;
   std::string fineOutputName_;
+  std::string restartName_;
+
 
   // meta, bulk, io, and promote element
   std::unique_ptr<stk::mesh::MetaData> metaData_;
@@ -162,7 +165,6 @@ public:
   // fields
   VectorFieldType* coordinates_;
   ScalarFieldType* dualNodalVolume_;
-  ScalarFieldType* detJ_;
   ScalarIntFieldType* sharedElems_;
   ScalarFieldType* q_;
   VectorFieldType* dqdx_;
@@ -170,6 +172,7 @@ public:
   // part vectors
   stk::mesh::PartVector originalPartVector_;
   stk::mesh::PartVector promotedPartVector_;
+  stk::mesh::PartVector superElemPartVector_;
 };
 
 } // namespace naluUnit

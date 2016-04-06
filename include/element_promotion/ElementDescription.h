@@ -37,7 +37,7 @@ public:
     return nodeMapBC[i+nodes1D*j];
   }
 
-  inline int tensor_product_node_map(int i) const
+  inline int tensor_product_node_map_bc(int i) const
   {
     return nodeMapBC[i];
   }
@@ -95,6 +95,7 @@ public:
   size_t dimension;
   size_t nodes1D;
   size_t nodesPerElement;
+  size_t nodesPerSubElement;
   AddedConnectivityOrdinalMap addedConnectivities;
   AddedConnectivityOrdinalMap edgeNodeConnectivities;
   AddedConnectivityOrdinalMap faceNodeConnectivities;

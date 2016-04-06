@@ -8,10 +8,10 @@ namespace naluUnit {
 
   struct ElementDescription;
 
-  class GLSQuadratureOps
+  class SGLQuadratureOps
   {
   public:
-    GLSQuadratureOps(const ElementDescription& elem);
+    SGLQuadratureOps(const ElementDescription& elem);
 
     void volume_2D(
       const double*  nodalValuesTensor,

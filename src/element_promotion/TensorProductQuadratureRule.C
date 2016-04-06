@@ -13,6 +13,13 @@
 namespace sierra{
 namespace naluUnit{
 
+//==========================================================================
+// Class Definition
+//==========================================================================
+// TensorProductQuadratureRule - Provides some tools for setting up the
+// integraton point locations / weights for integrating tensor-product elements
+//===========================================================================
+
 TensorProductQuadratureRule::TensorProductQuadratureRule(
   std::string type,
   int numQuad,
@@ -39,7 +46,7 @@ TensorProductQuadratureRule::TensorProductQuadratureRule(
   else if (type == "SGL"){
     int numNodes = scsLocs.size()+1;
     numQuad_ = 1; // only 1 quadrature point per scv
-    std::tie(abscissae_, weights_) = GLS_quadrature_rule(numNodes, scsEndLoc_);
+    std::tie(abscissae_, weights_) = SGL_quadrature_rule(numNodes, scsEndLoc_);
     useSGL_ = true;
   }
 }

@@ -29,12 +29,20 @@ ElementDescription::create(int dimension,int order, std::string quadType)
   // We lose an order of accuracy when enabled
   bool symmWeights = false;
 
-  if (dimension == 2 && order == 2) {
-    std::vector<double> in_nodeLocs = { -1.0, 0.0, +1.0 };
-    std::vector<double> in_scsLoc = { -std::sqrt(3.0)/3.0, std::sqrt(3.0)/3.0 };
-    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
+
+  if (!symmWeights) {
+    std::vector<double> lobattoNodes;
+    std::vector<double> legendreSCSLocations;
+    std::tie(lobattoNodes,std::ignore) = gauss_lobatto_legendre_rule(order+1);
+    std::tie(legendreSCSLocations,std::ignore) = gauss_legendre_rule(order);
+
+    if (dimension == 2) {
+      return make_unique<QuadMElementDescription>(lobattoNodes,legendreSCSLocations, quadType);
+    }
+    return make_unique<HexMElementDescription>(lobattoNodes, legendreSCSLocations, quadType);
   }
-  if (dimension == 2 && order == 3 && symmWeights) {
+
+  if (symmWeights && order == 3) {
     // symmetric mass matrix
     // I can't find a symmetric mass matrix for P > 3
     double xgll    = 0.4487053820572093009546164613323186035;
@@ -42,40 +50,10 @@ ElementDescription::create(int dimension,int order, std::string quadType)
     std::vector<double> in_nodeLocs = { -1.0, -xgll, +xgll, +1.0 };
     std::vector<double> in_scsLoc = { -scsDist, 0.0, scsDist };
 
-    return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
-  }
-
-  if (dimension == 2 && order >= 3) {
-     std::vector<double> lobattoNodes;
-     std::vector<double> legendreSCSLocations;
-     std::tie(lobattoNodes,std::ignore) = gauss_lobatto_legendre_rule(order+1);
-     std::tie(legendreSCSLocations,std::ignore) = gauss_legendre_rule(order);
-
-     return make_unique<QuadMElementDescription>(lobattoNodes,legendreSCSLocations, quadType);
-  }
-
-  if (dimension == 3 && order == 2) {
-    double scsDist = std::sqrt(3.0)/3.0;
-    std::vector<double> in_nodeLocs = {-1.0, 0.0, +1.0};
-    std::vector<double> in_scsLoc = { -scsDist, +scsDist };
-    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc, quadType);
-  }
-
-  if (dimension == 3 && order == 3 && symmWeights) {
-    double xgll    = 0.4487053820572093009546164613323186035;
-    double scsDist = 0.8347278713337825805263131558586123084;
-    std::vector<double> in_nodeLocs = { -1.0, -xgll, +xgll, +1.0 };
-    std::vector<double> in_scsLoc = { -scsDist, 0.0, scsDist };
-    return make_unique<HexMElementDescription>(in_nodeLocs, in_scsLoc, quadType);
-  }
-
-  if (dimension == 3 && order >= 3) {
-     std::vector<double> lobattoNodes;
-     std::vector<double> legendreSCSLocations;
-     std::tie(lobattoNodes,std::ignore) = gauss_lobatto_legendre_rule(order+1);
-     std::tie(legendreSCSLocations,std::ignore) = gauss_legendre_rule(order);
-
-     return make_unique<HexMElementDescription>(lobattoNodes,legendreSCSLocations, quadType);
+    if (dimension == 2) {
+      return make_unique<QuadMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
+    }
+    return make_unique<HexMElementDescription>(in_nodeLocs,in_scsLoc, quadType);
   }
 
   throw std::runtime_error("Element type not implemented");
@@ -105,6 +83,7 @@ QuadMElementDescription::QuadMElementDescription(
   else {
     numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   }
+  nodesPerSubElement = 4;
 
   set_node_connectivity();
   set_subelement_connectivity();
@@ -258,7 +237,7 @@ QuadMElementDescription::set_node_connectivity()
 
   inverseNodeMapBC.resize(nodes1D);
   for (unsigned j = 0; j < nodes1D; ++j) {
-    inverseNodeMapBC[tensor_product_node_map(j)] = { j };
+    inverseNodeMapBC[tensor_product_node_map_bc(j)] = { j };
   }
 }
 //--------------------------------------------------------------------------
@@ -302,6 +281,7 @@ HexMElementDescription::HexMElementDescription(
   else {
     numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   }
+  nodesPerSubElement = 8;
   set_node_connectivity();
   set_subelement_connectivity();
 

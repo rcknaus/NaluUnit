@@ -9,10 +9,13 @@
 
 #include <NaluEnv.h>
 
+#include <stk_util/environment/ReportHandler.hpp>
+
 #include <stddef.h>
 #include <ostream>
 #include <string>
 #include <vector>
+#include <limits>
 
 namespace sierra {
 namespace naluUnit {
@@ -23,21 +26,30 @@ namespace naluUnit {
     return (std::abs(approx-exact) < tol);
   }
 
+  template<typename Container> double
+  max_error(const Container& approx, const Container& exact)
+  {
+    if (approx.size() != exact.size() || approx.empty()) {
+      return std::numeric_limits<double>::max();
+    }
+
+    double err = -1.0;
+    for (unsigned j = 0; j < approx.size(); ++j) {
+      err = std::max(err, std::abs(approx[j]-exact[j]));
+    }
+    return err;
+  }
+
   template<typename Container, typename Scalar = double> bool
   is_near(
     const Container& approx,
     const Container& exact,
     Scalar tol)
   {
-    if (approx.size() != exact.size()) {
-      return false;
+    if (max_error(approx,exact) < tol) {
+      return true;
     }
-    for (unsigned j = 0; j < approx.size(); ++j) {
-      if (!is_near(approx[j], exact[j], tol)) {
-        return false;
-      }
-    }
-    return true;
+    return false;
   }
 
   inline void

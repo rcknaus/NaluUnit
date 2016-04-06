@@ -1562,7 +1562,7 @@ HigherOrderEdge2DSCS::HigherOrderEdge2DSCS(const ElementDescription& elem)
     for (unsigned i = 0; i < elem_.numQuad; ++i) {
       intgLoc_[scalar_index]  = elem_.gauss_point_location(k,i);
       ipWeight_[scalar_index] = elem_.tensor_product_weight(k,i);
-      ipNodeMap_[scalar_index] = elem_.tensor_product_node_map(k);
+      ipNodeMap_[scalar_index] = elem_.tensor_product_node_map_bc(k);
       ++scalar_index;
     }
   }
