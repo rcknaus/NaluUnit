@@ -58,10 +58,18 @@ public:
   void declare_super_part();
   void declare_super_part_surface();
 
+  // create all of the ids
+  void create_parent_edge_ids();
+  void create_parent_face_ids();
+  void create_parent_element_ids();
+
   void create_nodes();
 
   void create_elements();
   void create_elements_surface();
+
+  void create_edges_and_faces();
+  void delete_edges_and_faces();
   
   // register nodal and elemental fields
   void register_fields();
@@ -122,6 +130,10 @@ public:
 
   // in-transit part associated with augmented/promoted nodes
   stk::mesh::Part *promotedNodesPart_;
+
+  // in-transit part associated with edges and faces
+  stk::mesh::Part *edgePart_;
+  stk::mesh::Part *facePart_;
 
   // vector of new nodes
   std::vector<stk::mesh::Entity> promotedNodesVec_;

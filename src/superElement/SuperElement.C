@@ -18,6 +18,10 @@
 #include <stk_mesh/base/Selector.hpp>
 #include <stk_mesh/base/FEMHelpers.hpp>
 
+// edges and faces
+#include <stk_mesh/base/CreateEdges.hpp>
+#include <stk_mesh/base/CreateFaces.hpp>
+
 // stk_search
 #include <stk_search/CoarseSearch.hpp>
 #include <stk_search/IdentProc.hpp>
@@ -64,7 +68,10 @@ SuperElement::SuperElement()
     originalPart_(NULL),
     originalSurfacePart_(NULL),
     superElementPart_(NULL),
-    superElementSurfacePart_(NULL)
+    superElementSurfacePart_(NULL),
+    promotedNodesPart_(NULL),
+    edgePart_(NULL),
+    facePart_(NULL)
 {
   // nothing to do
 }
@@ -117,10 +124,18 @@ SuperElement::execute()
   
   // populate bulk data
   ioBroker_->populate_bulk_data();
+
+  // create the edges and faces on low order part
+  create_edges_and_faces();
   
   // extract coordinates
   coordinates_ = metaData_->get_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates");
   
+  // create the parent id maps
+  create_parent_edge_ids();
+  create_parent_face_ids();
+  create_parent_element_ids();
+
   // create nodes
   create_nodes();
   
@@ -135,6 +150,9 @@ SuperElement::execute()
     NaluEnv::self().naluOutputP0() << "....Need to figure out how to provide the super element topo with # sides, faces, etc for surface creation"
                                    << std::endl;
   }
+  
+  // delete the edges and faces
+  delete_edges_and_faces();
   
   // deal with output mesh
   set_output_fields();
@@ -217,10 +235,29 @@ SuperElement::declare_super_part_surface()
 }
 
 //--------------------------------------------------------------------------
-//-------- create_nodes ----------------------------------------------------
+//-------- create_edges_and_faces ------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::create_nodes()
+SuperElement::create_edges_and_faces()
+{
+  stk::mesh::create_edges(*bulkData_, stk::mesh::Selector(*originalPart_), edgePart_);
+  stk::mesh::create_faces(*bulkData_, stk::mesh::Selector(*originalPart_), facePart_);
+}
+
+//--------------------------------------------------------------------------
+//-------- delete_edges_and_faces ------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::delete_edges_and_faces()
+{
+  // delete it; not yet
+}
+
+//--------------------------------------------------------------------------
+//-------- create_parent_edge_ids ------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::create_parent_edge_ids()
 {
   // define some common selectors
   stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
@@ -236,24 +273,12 @@ SuperElement::create_nodes()
     // extract buckets topology
     stk::topology thisBucketsTopo = b.topology();
 
-    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      
-      // first, element center node
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
+
+      // extract node relations from the element
       stk::mesh::Entity const * node_rels = b.begin_nodes(k);
 
-      // vector to hold the element nodes
-      int numNodes = b.num_nodes(k);
-      stk::mesh::EntityIdVector volumeCentroidVec(numNodes);
-      for ( int ni = 0; ni < numNodes; ++ni ) {
-        stk::mesh::Entity node = node_rels[ni];
-        volumeCentroidVec[ni] = bulkData_->identifier(node);
-      }
-
-      // sort the nodes and push back
-      std::sort(volumeCentroidVec.begin(), volumeCentroidVec.end());
-      parentElemIds_.push_back(volumeCentroidVec);
-      
-      // second, nodes in the center of the edges
+      // iterate over the edges in the element
       const int numEdges = thisBucketsTopo.num_edges();
       for ( int ne = 0; ne < numEdges; ++ne ) {
 
@@ -278,8 +303,47 @@ SuperElement::create_nodes()
         std::sort(edgeCentroidVec.begin(), edgeCentroidVec.end());
         parentEdgeIds_.push_back(edgeCentroidVec);
       }
-      
-      // get number of faces
+    }
+  }
+
+  // sort the full parentId vector. At this point; we may have duplicate entries
+  std::sort(parentEdgeIds_.begin(), parentEdgeIds_.end());
+ 
+  // prune for unique pairs
+  std::vector<stk::mesh::EntityIdVector>::iterator pruneEdgeIdsIter
+    = std::unique(parentEdgeIds_.begin(), parentEdgeIds_.end());
+ 
+  // now erase
+  parentEdgeIds_.erase(pruneEdgeIdsIter, parentEdgeIds_.end());
+}
+
+
+//--------------------------------------------------------------------------
+//-------- create_parent_face_ids ------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::create_parent_face_ids()
+{
+  // define some common selectors
+  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*originalPart_);
+
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    
+    // extract buckets topology
+    stk::topology thisBucketsTopo = b.topology();
+
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+            
+      // extract node relations from the element
+      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+
+      // iterate over the faces in the element
       const int numFaces = thisBucketsTopo.num_faces();
       for ( int nf = 0; nf < numFaces; ++nf ) {
 
@@ -306,23 +370,73 @@ SuperElement::create_nodes()
   }
 
   // sort the full parentId vector. At this point; we may have duplicate entries
-  std::sort(parentElemIds_.begin(), parentElemIds_.end());
-  std::sort(parentEdgeIds_.begin(), parentEdgeIds_.end());
   std::sort(parentFaceIds_.begin(), parentFaceIds_.end());
 
   // prune for unique pairs
-  std::vector<stk::mesh::EntityIdVector>::iterator pruneElemIdsIter
-    = std::unique(parentElemIds_.begin(), parentElemIds_.end());
-  std::vector<stk::mesh::EntityIdVector>::iterator pruneEdgeIdsIter
-    = std::unique(parentEdgeIds_.begin(), parentEdgeIds_.end());
   std::vector<stk::mesh::EntityIdVector>::iterator pruneFaceIdsIter
     = std::unique(parentFaceIds_.begin(), parentFaceIds_.end());
 
   // now erase
-  parentElemIds_.erase(pruneElemIdsIter, parentElemIds_.end());
-  parentEdgeIds_.erase(pruneEdgeIdsIter, parentEdgeIds_.end());
-  parentFaceIds_.erase(pruneFaceIdsIter, parentFaceIds_.end());
+  parentFaceIds_.erase(pruneFaceIdsIter, parentFaceIds_.end());  
+}
 
+
+//--------------------------------------------------------------------------
+//-------- create_parent_element_ids ---------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::create_parent_element_ids()
+{
+  // define some common selectors
+  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*originalPart_);
+
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    
+    // extract buckets topology
+    stk::topology thisBucketsTopo = b.topology();
+
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // extract node relations
+      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+
+      // iterate over the nodes in the element
+      int numNodes = b.num_nodes(k);
+      stk::mesh::EntityIdVector volumeCentroidVec(numNodes);
+      for ( int ni = 0; ni < numNodes; ++ni ) {
+        stk::mesh::Entity node = node_rels[ni];
+        volumeCentroidVec[ni] = bulkData_->identifier(node);
+      }
+
+      // sort the nodes and push back
+      std::sort(volumeCentroidVec.begin(), volumeCentroidVec.end());
+      parentElemIds_.push_back(volumeCentroidVec);
+    }
+  }
+
+  // sort the full parentId vector. At this point; we may have duplicate entries
+  std::sort(parentElemIds_.begin(), parentElemIds_.end());
+ 
+  // prune for unique pairs
+  std::vector<stk::mesh::EntityIdVector>::iterator pruneElemIdsIter
+    = std::unique(parentElemIds_.begin(), parentElemIds_.end());
+  
+  // now erase
+  parentElemIds_.erase(pruneElemIdsIter, parentElemIds_.end());
+}
+
+//--------------------------------------------------------------------------
+//-------- create_nodes ----------------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::create_nodes()
+{
   // count the number of promoted nodal ids required; based on parentIds size (which has been sorted)
   const int pM1Order = pOrder_ - 1;
   const int pElemFac = std::pow(pM1Order, nDim_);
