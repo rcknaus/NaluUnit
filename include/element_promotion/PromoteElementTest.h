@@ -136,7 +136,7 @@ public:
 
   // sets the scalar to 1. Otherwise, sets it equal to the
   // values for the heat conduction MMS
-  bool constScalarField_;
+  bool linearScalarField_;
   unsigned nDim_;
   unsigned order_;
   bool outputTiming_;

@@ -36,8 +36,6 @@
 #include <stk_util/environment/ReportHandler.hpp>
 #include <stk_util/parallel/Parallel.hpp>
 
-#include <Teuchos_BLAS.hpp>
-
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -62,7 +60,7 @@ PromoteElementTest::PromoteElementTest(
     resultsFileIndex_(1),
     meshName_(std::move(meshName)),
     defaultFloatingPointTolerance_(1.0e-12),
-    constScalarField_(true),
+    linearScalarField_(true),
     nDim_(dimension),
     order_(order),
     outputTiming_(false),
@@ -417,7 +415,6 @@ PromoteElementTest::compute_dual_nodal_volume_interior_SGL(
   std::vector<double> ws_coordinates(nodesPerElement*nDim_);
   std::vector<double> ws_scv_volume(numScvIp);
 
-  auto blas = Teuchos::BLAS<int, double>();
   std::vector<double> dnvTensor(nodesPerElement,0.0);
   std::vector<double> temp(nodesPerElement,0.0);
   auto quadOp = SGLQuadratureOps(*elem_);
@@ -785,7 +782,6 @@ PromoteElementTest::compute_projected_nodal_gradient_boundary_SGL(
     std::vector<double> integrated_result(numScsIp*nDim_);
 
     auto quadOp = SGLQuadratureOps{*elem_};
-    auto blas = Teuchos::BLAS<int, double>();
     int nodesPerElement = meBC_->nodesPerElement_;
 
     for (size_t k = 0; k < length; ++k) {
@@ -962,7 +958,7 @@ PromoteElementTest::check_projected_nodal_gradient()
   // test assumes that the scalar q is constant
   // will fail otherwise
 
-  if (!constScalarField_) {
+  if (!linearScalarField_) {
     NaluEnv::self().naluOutputP0()
         << "Warning: PNG test assumes a constant field.  Test will definitely fail."
         << std::endl;
@@ -971,7 +967,7 @@ PromoteElementTest::check_projected_nodal_gradient()
 
   double tol = 1.0e-8; //P=5 is off on this test by 6.07e-10
 
-  std::vector<double> zeroVec(nDim_,0.0);
+  std::vector<double> oneVec(nDim_,1.0);
   std::vector<double> ws_dqdx(nDim_);
 
   stk::mesh::Selector s_all_entities = metaData_->universal_part(); // all nodes
@@ -986,7 +982,7 @@ PromoteElementTest::check_projected_nodal_gradient()
         ws_dqdx[j] = dqdx[k*nDim_+j];
       }
 
-      if (is_near(ws_dqdx, zeroVec, tol)) {
+      if (is_near(ws_dqdx, oneVec, tol)) {
         testPassed = true;
       }
       else {
@@ -1196,6 +1192,7 @@ PromoteElementTest::set_output_fields()
 
   ioBroker_->add_field(restartFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
   ioBroker_->add_field(restartFileIndex_, *sharedElems_, sharedElems_->name());
+  ioBroker_->add_field(restartFileIndex_, *q_, q_->name());
 
   promoteIO_ = make_unique<PromotedElementIO>(
     *elem_,
@@ -1225,8 +1222,11 @@ PromoteElementTest::initialize_fields()
     double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       dualNodalVolume[k] = 0.0;
-      if (constScalarField_) {
-        q[k] = 1.0;
+      if (linearScalarField_) {
+        q[k] = 0.0;
+        for (unsigned j = 0; j < nDim_; ++j) {
+          q[k] += coords[j+k*nDim_];
+        }
       }
       else {
         if (nDim_ == 2) {
@@ -1261,8 +1261,11 @@ PromoteElementTest::initialize_scalar()
     double* dqdx = stk::mesh::field_data(*dqdx_, b);
     double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      if (constScalarField_) {
-        q[k] = 1.0;
+      if (linearScalarField_) {
+        q[k] = 0.0;
+        for (unsigned j = 0; j < nDim_; ++j) {
+          q[k] += coords[j+k*nDim_];
+        }
       }
       else {
         if (nDim_ == 2) {

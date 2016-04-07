@@ -78,7 +78,10 @@ PromoteElement::promote_elements(
 
   ElemRelationsMap elemNodeMap;
   populate_elem_node_relations(elemDescription_, mesh, basePartSelector, nodeRequests, elemNodeMap);
-  create_elements(mesh, base_elem_parts(baseParts), elemNodeMap);
+  create_elements(mesh, baseParts, elemNodeMap);
+
+  auto baseAndSuperElemParts = append_super_elems_to_part_vector(baseParts);
+  populate_boundary_connectivity_map_using_super_elems(mesh, baseAndSuperElemParts);
 
   if (dimension_ == 2) {
     set_new_node_coords<2>(coordinates, elemDescription_, mesh, nodeRequests, elemNodeMap);
@@ -340,7 +343,6 @@ PromoteElement::populate_elem_node_relations(
 
   populate_original_elem_node_relations(mesh, selector, requests, elemNodeMap);
   populate_new_elem_node_relations(requests,elemNodeMap);
-  populate_boundary_elem_node_relations(elemDescription, mesh, selector, requests, elemNodeMap);
 }
 //--------------------------------------------------------------------------
 void
@@ -412,73 +414,14 @@ PromoteElement::populate_new_elem_node_relations(
 }
 //--------------------------------------------------------------------------
 void
-PromoteElement::populate_boundary_elem_node_relations(
-  const ElementDescription& elemDescription,
-  const stk::mesh::BulkData& mesh,
-  const stk::mesh::Selector& selector,
-  const NodeRequests& requests,
-  ElemRelationsMap& elemNodeMap)
-{
-  // Boundaries
-  auto topo = (dimension_ == 2) ?
-      stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
-
-  const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
-    topo, selector
-  );
-
-  auto nodes1D = elemDescription.nodes1D;
-  nodeElemMapBC_.reserve(
-    count_entities(boundary_buckets)*nodes1D
-  );
-
-  std::vector<stk::mesh::Entity> faceNodes(std::pow(nodes1D,dimension_-1));
-  for (const auto* ib : boundary_buckets) {
-    const stk::mesh::Bucket& b = *ib;
-    const stk::mesh::Bucket::size_type length = b.size();
-
-    for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
-      const auto face = b[k];
-
-      const auto* parent_elems = mesh.begin_elements(face);
-      ThrowAssert(mesh.num_elements(face) == 1);
-
-      const auto* face_elem_ords = mesh.begin_element_ordinals(face);
-      const unsigned face_ordinal = face_elem_ords[0];
-      const auto& elem_node_rels = elemNodeMap.at(parent_elems[0]);
-      const auto& nodeOrdinalsForFace = elemDescription.faceNodeMap[face_ordinal];
-
-      if (dimension_ == 2) {
-        for (unsigned j = 0; j < nodes1D; ++j) {
-          int ordinal = elemDescription.tensor_product_node_map_bc(j);
-          faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[j]];
-        }
-      }
-      else {
-        for (unsigned j = 0; j < nodes1D; ++j) {
-          for (unsigned i = 0; i < nodes1D; ++i) {
-            int ordinal = elemDescription.tensor_product_node_map_bc(i,j);
-            faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[i+nodes1D*j]];
-          }
-        }
-      }
-      elemNodeMapBC_.insert({face, faceNodes});
-
-      for (auto faceNode : faceNodes) {
-        nodeElemMapBC_.insert({faceNode, {face}});
-      }
-    }
-  }
-}
-//--------------------------------------------------------------------------
-void
 PromoteElement::create_elements(
   stk::mesh::BulkData& mesh,
-  const stk::mesh::PartVector& baseElemParts,
+  const stk::mesh::PartVector& baseParts,
   ElemRelationsMap& elemNodeMap) const
 {
   ThrowAssert(check_elem_node_relations(mesh, elemNodeMap));
 
+  auto baseElemParts = base_elem_parts(baseParts);
   // Generate all new ids up front
   const auto numNewElem = count_entities(mesh.get_buckets(
     stk::topology::ELEM_RANK,
@@ -490,21 +433,20 @@ PromoteElement::create_elements(
 
   // declare super element copies for each base element
   for (const auto* ibasePart : baseElemParts) {
-    const auto& baseElemPart = *ibasePart;
+    const stk::mesh::Part& baseElemPart = *ibasePart;
     ThrowAssertMsg(baseElemPart.topology().rank() == stk::topology::ELEM_RANK,
-      "Tried to create a super-element part from a part that was not of element rank");
+      "Tried to create elements on a super-element part from a part that was not of element rank");
     const auto& elem_buckets = mesh.get_buckets(stk::topology::ELEM_RANK, baseElemPart);
 
-    ThrowAssertMsg(super_elem_part(baseElemPart) != nullptr,
-      "Super element part not declared");
-    auto& superElemPart = *super_elem_part(baseElemPart);
+    ThrowAssertMsg(super_elem_part(baseElemPart) != nullptr, "Super element part not declared");
+    stk::mesh::Part& superElemPart = *super_elem_part(baseElemPart);
 
     std::vector<stk::mesh::EntityId> connectedNodeIds(nodesPerElement_);
     size_t elemIdIndex = 0;
     for (const auto* ib : elem_buckets) {
       const stk::mesh::Bucket& b = *ib;
       for (size_t k = 0; k < b.size(); ++k) {
-        const auto& nodes = elemNodeMap.at(b[k]);
+        const std::vector<stk::mesh::Entity>& nodes = elemNodeMap.at(b[k]);
         std::transform(nodes.begin(), nodes.end(), connectedNodeIds.begin(),
           [&mesh] (stk::mesh::Entity e) {
             return mesh.identifier(e);
@@ -777,6 +719,158 @@ PromoteElement::count_requested_nodes(const NodeRequests& requests) const
     numNodes += request.num_children();
   }
   return numNodes;
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::populate_boundary_connectivity_map_using_super_elems(
+  const stk::mesh::BulkData& mesh,
+  const stk::mesh::PartVector& mesh_parts)
+{
+  // Generates connectivity at exposed faces for the super elements (which lack that information)
+
+  const auto superElemParts = only_super_elem_parts(mesh_parts);
+  ThrowRequireMsg(part_vector_is_valid(superElemParts), "No super element part in part vector!");
+
+  populate_exposed_face_to_super_elem_map(elemDescription_, mesh, mesh_parts, superElemParts);
+
+  auto rank = (dimension_ == 2) ? stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
+
+  const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
+    rank, stk::mesh::selectUnion(mesh_parts)
+  );
+
+  auto nodes1D = elemDescription_.nodes1D;
+  std::vector<stk::mesh::Entity> faceNodes(std::pow(nodes1D,dimension_-1));
+  for (const auto* ib : boundary_buckets) {
+    const stk::mesh::Bucket& b = *ib;
+    const stk::mesh::Bucket::size_type length = b.size();
+
+    for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
+      const auto face = b[k];
+      stk::mesh::Entity super_elem = exposedFaceToSuperElemMap_.at(face);
+
+      const auto* face_elem_ords = mesh.begin_element_ordinals(face);
+      const unsigned face_ordinal = face_elem_ords[0];
+      const auto& elem_node_rels = mesh.begin_nodes(super_elem);
+      const auto& nodeOrdinalsForFace = elemDescription_.faceNodeMap[face_ordinal];
+
+      if (dimension_ == 2) {
+        for (unsigned j = 0; j < nodes1D; ++j) {
+          int ordinal = elemDescription_.tensor_product_node_map_bc(j);
+          faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[j]];
+        }
+      }
+      else {
+        for (unsigned j = 0; j < nodes1D; ++j) {
+          for (unsigned i = 0; i < nodes1D; ++i) {
+            int ordinal = elemDescription_.tensor_product_node_map_bc(i,j);
+            faceNodes[ordinal] = elem_node_rels[nodeOrdinalsForFace[i+nodes1D*j]];
+          }
+        }
+      }
+      elemNodeMapBC_.insert({face, faceNodes});
+
+      for (auto faceNode : faceNodes) {
+        nodeElemMapBC_.insert({faceNode, {face}});
+      }
+    }
+  }
+}
+//--------------------------------------------------------------------------
+PromoteElement::NodesElemMap
+PromoteElement::make_base_nodes_to_elem_map_at_boundary(
+  const ElementDescription& elemDesc,
+  const stk::mesh::BulkData& mesh,
+  const stk::mesh::PartVector& mesh_parts) const
+{
+  auto rank = (dimension_ == 2) ?
+      stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
+  const auto& baseElemSideBuckets = mesh.get_buckets(
+    rank,
+    stk::mesh::selectUnion(mesh_parts)
+  );
+
+  const auto baseNumNodes = elemDesc.nodesInBaseElement;
+  NodesElemMap nodesToElemMap;
+  std::vector<stk::mesh::EntityId> parents(baseNumNodes);
+  for (const auto* ib : baseElemSideBuckets) {
+    const stk::mesh::Bucket& b = *ib;
+    for (size_t k = 0; k < b.size(); ++k) {
+      const auto face = b[k];
+
+      const stk::mesh::Entity* parent_elems = mesh.begin_elements(face);
+      ThrowAssert(mesh.num_elements(face) == 1);
+      const auto* node_rels = mesh.begin_nodes(parent_elems[0]);
+      ThrowAssert(mesh.num_nodes(parent_elems[0]) == parents.size());
+
+      for (unsigned j = 0; j < baseNumNodes; ++j) {
+        parents[j] = mesh.identifier(node_rels[j]);
+      }
+      std::sort(parents.begin(), parents.end());
+      nodesToElemMap.insert({parents,parent_elems[0]});
+    }
+  }
+  return nodesToElemMap;
+}
+//--------------------------------------------------------------------------
+void
+PromoteElement::populate_exposed_face_to_super_elem_map(
+  const ElementDescription& elemDesc,
+  const stk::mesh::BulkData& mesh,
+  const stk::mesh::PartVector& mesh_parts,
+  const stk::mesh::PartVector& superElemParts)
+{
+  const auto& superElemBuckets = mesh.get_buckets(
+    stk::topology::ELEM_RANK,
+    stk::mesh::selectUnion(superElemParts)
+  );
+  auto nodesToElemMap = make_base_nodes_to_elem_map_at_boundary(elemDescription_, mesh, mesh_parts);
+
+  std::unordered_map<stk::mesh::Entity, stk::mesh::Entity> elemToSuperElemMap;
+
+  const auto baseNumNodes = elemDesc.nodesInBaseElement;
+  std::vector<stk::mesh::EntityId> parents(baseNumNodes);
+  for (const auto* ib : superElemBuckets) {
+    const stk::mesh::Bucket& b = *ib;
+    parents.resize(elemDesc.nodesInBaseElement);
+    for (size_t k = 0; k < b.size(); ++k) {
+      const auto* node_rels = b.begin_nodes(k);
+      ThrowAssert(b.num_nodes(k) > baseNumNodes);
+
+      // Requires the convention that the base nodes are stored
+      // first in the elem node relations still holds
+      for (unsigned j = 0; j < baseNumNodes ; ++j) {
+        parents[j] = mesh.identifier(node_rels[j]);
+      }
+      std::sort(parents.begin(), parents.end());
+
+      auto it = nodesToElemMap.find(parents);
+      if (it != nodesToElemMap.end()) {
+        elemToSuperElemMap.insert({it->second, b[k]});
+      }
+    }
+  }
+  nodesToElemMap.clear();
+
+  auto rank = (dimension_ == 2) ? stk::topology::EDGE_RANK : stk::topology::FACE_RANK;
+
+  const stk::mesh::BucketVector& boundary_buckets = mesh.get_buckets(
+    rank, stk::mesh::selectUnion(mesh_parts)
+  );
+
+  auto nodes1D = elemDescription_.nodes1D;
+  std::vector<stk::mesh::Entity> faceNodes(std::pow(nodes1D,dimension_-1));
+  for (const auto* ib : boundary_buckets) {
+    const stk::mesh::Bucket& b = *ib;
+    const stk::mesh::Bucket::size_type length = b.size();
+
+    for (stk::mesh::Bucket::size_type k = 0; k < length; ++k) {
+      const auto face = b[k];
+      const stk::mesh::Entity* parent_elems = mesh.begin_elements(face);
+      ThrowAssert(mesh.num_elements(face) == 1);
+      exposedFaceToSuperElemMap_.insert({face,elemToSuperElemMap.at(parent_elems[0])});
+    }
+  }
 }
 //==========================================================================
 // Class Definition

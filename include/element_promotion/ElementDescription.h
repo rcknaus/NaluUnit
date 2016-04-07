@@ -95,6 +95,7 @@ public:
   size_t dimension;
   size_t nodes1D;
   size_t nodesPerElement;
+  size_t nodesInBaseElement;
   size_t nodesPerSubElement;
   AddedConnectivityOrdinalMap addedConnectivities;
   AddedConnectivityOrdinalMap edgeNodeConnectivities;
@@ -114,6 +115,7 @@ public:
   std::vector<std::vector<unsigned>> inverseNodeMap;
   std::vector<std::vector<unsigned>> inverseNodeMapBC;
   std::vector<std::vector<size_t>> faceNodeMap;
+  std::vector<std::vector<size_t>> sideOrdinalMap;
 protected:
   ElementDescription() = default;
 };

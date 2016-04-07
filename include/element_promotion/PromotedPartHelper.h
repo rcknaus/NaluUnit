@@ -35,6 +35,7 @@ namespace naluUnit {
   stk::mesh::PartVector base_elem_parts(const stk::mesh::PartVector& parts);
   stk::mesh::Part* base_elem_part_from_super_elem_part(const stk::mesh::Part& super_elem_part);
   stk::mesh::PartVector only_super_elem_parts(const stk::mesh::PartVector& parts);
+  stk::mesh::PartVector append_super_elems_to_part_vector(stk::mesh::PartVector parts);
 
   size_t num_sub_elements(
     const stk::mesh::MetaData& metaData,

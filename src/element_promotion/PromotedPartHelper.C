@@ -131,6 +131,13 @@ namespace naluUnit{
     return baseElemParts;
   }
   //--------------------------------------------------------------------------
+  stk::mesh::PartVector append_super_elems_to_part_vector(stk::mesh::PartVector parts)
+  {
+    auto superElemParts = super_elem_part_vector(parts);
+    parts.insert(parts.end(), superElemParts.begin(), superElemParts.end());
+    return parts;
+  }
+  //--------------------------------------------------------------------------
   size_t
   num_sub_elements(
     const stk::mesh::MetaData& metaData,

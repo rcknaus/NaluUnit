@@ -7,6 +7,7 @@
 #include <element_promotion/MasterElementHO.h>
 #include <element_promotion/ElementDescription.h>
 #include <element_promotion/LagrangeBasis.h>
+
 #include <element_promotion/MasterElement.h>
 
 #include <array>
@@ -21,11 +22,6 @@ HigherOrderHexSCV::HigherOrderHexSCV(const ElementDescription& elem)
   : MasterElement(),
     elem_(elem)
 {
-  // TODO(rcknaus): need to pick a modal basis (Hex8 or Hex27, really)
-  // and use it only for Jacobian calculations (i.e. volume & area)
-  // otherwise, computing the mass matrix
-  // scales far too viciously with p (O(p^9))
-
   nDim_ = elem_.dimension;
   nodesPerElement_ = elem_.nodesPerElement;
 
@@ -53,7 +49,7 @@ HigherOrderHexSCV::set_interior_info()
   intgLocShift_.resize(numIntPoints_*nDim_);
   ipWeight_.resize(numIntPoints_);
 
-  // tensor product nodes (3x3x3) x tensor product quadrature (2x2x2)
+  // tensor product nodes x tensor product quadrature
   int vector_index = 0; int scalar_index = 0;
   for (unsigned n = 0; n < elem_.nodes1D; ++n) {
     for (unsigned m = 0; m < elem_.nodes1D; ++m) {
@@ -185,25 +181,25 @@ HigherOrderHexSCS::HigherOrderHexSCS(const ElementDescription& elem)
   set_interior_info();
 
   // set up integration rule and relevant maps on faces
-  //set_boundary_info();
+  set_boundary_info();
 
   shapeFunctions_ = elem_.eval_basis_weights(intgLoc_);
   shapeDerivs_ = elem_.eval_deriv_weights(intgLoc_);
-  //expFaceShapeDerivs_ = elem_.eval_deriv_weights(intgExpFace_);
+  expFaceShapeDerivs_ = elem_.eval_deriv_weights(intgExpFace_);
 }
 //--------------------------------------------------------------------------
 void
 HigherOrderHexSCS::set_interior_info()
 {
-  const int surfacesPerDirection = elem_.nodes1D - 1; // 2
-  const int ipsPerSurface = (elem_.numQuad*elem_.numQuad)*(elem_.nodes1D*elem_.nodes1D); // 36
-  const int numSurfaces = surfacesPerDirection * nDim_; // 6
+  const int surfacesPerDirection = elem_.nodes1D - 1;
+  const int ipsPerSurface = (elem_.numQuad*elem_.numQuad)*(elem_.nodes1D*elem_.nodes1D);
+  const int numSurfaces = surfacesPerDirection * nDim_;
 
-  numIntPoints_ = numSurfaces*ipsPerSurface; // 216
-  const int numVectorPoints = numIntPoints_*nDim_; // 648
+  numIntPoints_ = numSurfaces*ipsPerSurface;
+  const int numVectorPoints = numIntPoints_*nDim_;
 
   // define L/R mappings
-  lrscv_.resize(2*numIntPoints_); // size = 432
+  lrscv_.resize(2*numIntPoints_);
 
   // standard integration location
   intgLoc_.resize(numVectorPoints);
@@ -340,36 +336,46 @@ HigherOrderHexSCS::set_interior_info()
 void
 HigherOrderHexSCS::set_boundary_info()
 {
-  const int numFaces = 2 * nDim_; // 6
-  const int nodesPerFace = elem_.nodes1D * elem_.nodes1D; // 9
-  ipsPerFace_ = nodesPerFace * (elem_.numQuad * elem_.numQuad); // 36
-  const int numFaceIps = numFaces * ipsPerFace_; // 216 = numIntPoints_ for this element
+  const int numFaces = 2 * nDim_;
+  int numQuad = static_cast<int>(elem_.numQuad);
+  int nodes1D = static_cast<int>(elem_.nodes1D);
+  const int nodesPerFace = nodes1D * nodes1D;
+  ipsPerFace_ = nodesPerFace * (numQuad * numQuad);
+  int surfacesPerDirection = nodes1D - 1;
+  const int numFaceIps = numFaces * ipsPerFace_;
 
   oppFace_.resize(numFaceIps);
   ipNodeMap_.resize(numFaceIps);
   oppNode_.resize(numFaceIps);
-  intgExpFace_.resize(numFaceIps*nDim_); // size = 648
+  intgExpFace_.resize(numFaceIps*nDim_);
 
   // tensor-product style access to the map
-  auto face_node_number = [=] (int i, int j, int faceOrdinal)
+  auto face_node_number = [&] (int i, int j, int faceOrdinal)
   {
-    return elem_.faceNodeMap[faceOrdinal][i + elem_.nodes1D * j];
+    return elem_.faceNodeMap[faceOrdinal][i + nodes1D * j];
   };
 
   // map face ip ordinal to nearest sub-control surface ip ordinal
   // sub-control surface renumbering
-  const std::vector<int> faceToSurface = { 2, 5, 3, 4, 0, 1 };
-  auto opp_face_map = [=] ( int k, int l, int i, int j, int face_index)
+  const std::vector<int> faceToSurface = {
+      surfacesPerDirection,     // nearest scs face to t=-1.0
+      3*surfacesPerDirection-1, // nearest scs face to s=+1.0, the last face
+      2*surfacesPerDirection-1, // nearest scs face to t=+1.0
+      2*surfacesPerDirection,   // nearest scs face to s=-1.0
+      0,                        // nearest scs face to u=-1.0, the first face
+      surfacesPerDirection-1    // nearest scs face to u=+1.0, the first face
+  };
+  auto opp_face_map = [&] ( int k, int l, int i, int j, int face_index)
   {
     int face_offset = faceToSurface[face_index] * ipsPerFace_;
 
-    int node_index = k + elem_.nodes1D * l;
-    int node_offset = node_index * (elem_.numQuad * elem_.numQuad);
+    int node_index = k + nodes1D * l;
+    int node_offset = node_index * (numQuad * numQuad);
 
-    int ip_index = face_offset+node_offset+i+elem_.numQuad*j;
+    int ip_index = face_offset+node_offset+i+numQuad*j;
 
     return ip_index;
-  };
+   };
 
   // location of the faces in the correct order
   const std::vector<double> faceLoc = {-1.0, +1.0, +1.0, -1.0, -1.0, +1.0};
@@ -379,14 +385,14 @@ HigherOrderHexSCS::set_boundary_info()
 
   // front face: t = -1.0: counter-clockwise
   faceOrdinal = 0;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (unsigned k = 0; k < elem_.nodes1D; ++k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = 0; k < nodes1D; ++k) {
       const int nearNode = face_node_number(k,l,faceOrdinal);
-      int oppNode = elem_.tensor_product_node_map(k, 1, l);
+      int oppNode = elem_.tensor_product_node_map(k,1,l);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (unsigned i = 0; i < elem_.numQuad; ++i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = 0; i < numQuad; ++i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index] = oppNode;
@@ -407,14 +413,14 @@ HigherOrderHexSCS::set_boundary_info()
 
   // right face: s = +1.0: counter-clockwise
   faceOrdinal = 1;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (unsigned k = 0; k < elem_.nodes1D; ++k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = 0; k < nodes1D; ++k) {
       const int nearNode = face_node_number(k,l,faceOrdinal);
-      int oppNode = elem_.tensor_product_node_map(elem_.nodes1D-2,k,l);
+      int oppNode = elem_.tensor_product_node_map(nodes1D-2,k,l);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (unsigned i = 0; i < elem_.numQuad; ++i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = 0; i < numQuad; ++i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index] = oppNode;
@@ -433,18 +439,16 @@ HigherOrderHexSCS::set_boundary_info()
     }
   }
 
-  int elemNodesM1 = elem_.nodes1D-1;
-
-  // back face: s = +1.0: s-direction reversed
+  // back face: t = +1.0: s-direction reversed
   faceOrdinal = 2;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (int k = elemNodesM1; k >= 0; --k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = nodes1D-1; k >= 0; --k) {
       const int nearNode = face_node_number(k,l,faceOrdinal);
-      int oppNode = elem_.tensor_product_node_map(k, elem_.nodes1D-2,l);
+      int oppNode = elem_.tensor_product_node_map(k,nodes1D-2,l);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (int i = elemNodesM1; i >= 0; --i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = numQuad-1; i >= 0; --i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index] = oppNode;
@@ -465,14 +469,14 @@ HigherOrderHexSCS::set_boundary_info()
 
   //left face: x = -1.0 swapped t and u
   faceOrdinal = 3;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (unsigned k = 0; k < elem_.nodes1D; ++k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = 0; k < nodes1D; ++k) {
       const int nearNode = face_node_number(l,k,faceOrdinal);
       int oppNode = elem_.tensor_product_node_map(1,l,k);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (unsigned i = 0; i < elem_.numQuad; ++i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = 0; i < numQuad; ++i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index]   = oppNode;
@@ -493,14 +497,14 @@ HigherOrderHexSCS::set_boundary_info()
 
   //bottom face: u = -1.0: swapped s and t
   faceOrdinal = 4;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (unsigned k = 0; k < elem_.nodes1D; ++k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = 0; k < nodes1D; ++k) {
       const int nearNode = face_node_number(l,k,faceOrdinal);
       int oppNode = elem_.tensor_product_node_map(l,k,1);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (unsigned i = 0; i < elem_.numQuad; ++i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = 0; i < numQuad; ++i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index] = oppNode;
@@ -521,14 +525,14 @@ HigherOrderHexSCS::set_boundary_info()
 
   //top face: u = +1.0: counter-clockwise
   faceOrdinal = 5;
-  for (unsigned l = 0; l < elem_.nodes1D; ++l) {
-    for (unsigned k = 0; k < elem_.nodes1D; ++k) {
+  for (int l = 0; l < nodes1D; ++l) {
+    for (int k = 0; k < nodes1D; ++k) {
       const int nearNode = face_node_number(k,l,faceOrdinal);
-      int oppNode = elem_.tensor_product_node_map(k,l,elem_.nodes1D-2);
+      int oppNode = elem_.tensor_product_node_map(k,l,nodes1D-2);
 
       //tensor-product quadrature for a particular sub-cv
-      for (unsigned j = 0; j < elem_.numQuad; ++j) {
-        for (unsigned i = 0; i < elem_.numQuad; ++i) {
+      for (int j = 0; j < numQuad; ++j) {
+        for (int i = 0; i < numQuad; ++i) {
           // set maps
           ipNodeMap_[scalar_index] = nearNode;
           oppNode_[scalar_index] = oppNode;
@@ -546,6 +550,7 @@ HigherOrderHexSCS::set_boundary_info()
       }
     }
   }
+  //throw std::runtime_error("check");
 }
 //--------------------------------------------------------------------------
 void
@@ -815,7 +820,22 @@ HigherOrderHexSCS::gradient(
     grad[vector_offset + 2] = dn_ds1 * ds1_dz + dn_ds2 * ds2_dz + dn_ds3 * ds3_dz;
   }
 }
-
+//--------------------------------------------------------------------------
+//-------- gij -------------------------------------------------------------
+//--------------------------------------------------------------------------
+void HigherOrderHexSCS::gij(
+  const double *coords,
+  double *gupperij,
+  double *glowerij,
+  double *deriv)
+{
+  throw std::runtime_error("Not implemented in unit test");
+//  SIERRA_FORTRAN(threed_gij)
+//    ( &nodesPerElement_,
+//      &numIntPoints_,
+//      deriv,
+//      coords, gupperij, glowerij);
+}
 //--------------------------------------------------------------------------
 //-------- constructor -----------------------------------------------------
 //--------------------------------------------------------------------------
@@ -841,15 +861,15 @@ HigherOrderQuad3DSCS::set_interior_info()
   nodesPerElement_ = elem_.nodes1D * elem_.nodes1D;
 
   //1D integration rule per sub-control volume
-  numIntPoints_ = (elem_.nodes1D * elem_.nodes1D) * ( elem_.numQuad * elem_.numQuad ); // 36
+  numIntPoints_ = (elem_.nodes1D * elem_.nodes1D) * ( elem_.numQuad * elem_.numQuad );
 
   // define ip node mappings
   ipNodeMap_.resize(numIntPoints_);
-  intgLoc_.resize(numIntPoints_*surfaceDimension_); // size = 72
-  intgLocShift_.resize(numIntPoints_*surfaceDimension_); // size = 72
+  intgLoc_.resize(numIntPoints_*surfaceDimension_);
+  intgLocShift_.resize(numIntPoints_*surfaceDimension_);
   ipWeight_.resize(numIntPoints_);
 
-  // tensor product nodes (3x3) x tensor product quadrature (2x2)
+  // tensor product nodes x tensor product quadrature
   int vector_index_2D = 0; int scalar_index = 0;
   for (unsigned l = 0; l < elem_.nodes1D; ++l) {
     for (unsigned k = 0; k < elem_.nodes1D; ++k) {
@@ -1116,7 +1136,6 @@ HigherOrderQuad2DSCS::set_interior_info()
   ipInfo_.resize(numIntPoints_);
 
   // specify integration point locations in a dimension-by-dimension manner
-  //int mid = (linesPerDirection);
 
   //u-direction
   int vector_index = 0;
@@ -1187,7 +1206,6 @@ HigherOrderQuad2DSCS::set_interior_info()
         intgLoc_[vector_index+1] = elem_.gauss_point_location(l,j);
 
         //compute the quadrature weight
-
         ipInfo_[scalar_index].weight = orientation*elem_.tensor_product_weight(l,j);
 
         //direction
@@ -1286,7 +1304,6 @@ HigherOrderQuad2DSCS::set_boundary_info()
     for (unsigned j = 0; j < elem_.numQuad; ++j) {
       ipNodeMap_[scalar_index] = nearNode;
       oppNode_[scalar_index] = oppNode;
-      //oppFace_[scalar_index] = oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
       oppFace_[scalar_index] = (ipsPerFace_-1) - oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
 
       intgExpFace_[vector_index] = intgLoc_[oppFace_[scalar_index]*nDim_+0];
@@ -1307,7 +1324,6 @@ HigherOrderQuad2DSCS::set_boundary_info()
     for (unsigned j = 0; j < elem_.numQuad; ++j) {
       ipNodeMap_[scalar_index] = nearNode;
       oppNode_[scalar_index] = oppNode;
-      //oppFace_[scalar_index] = oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
       oppFace_[scalar_index] = (ipsPerFace_-1) - oppFaceIndex + faceToLine[faceOrdinal]*ipsPerFace_;
 
       intgExpFace_[vector_index]   = faceLoc[faceOrdinal];
@@ -1318,7 +1334,6 @@ HigherOrderQuad2DSCS::set_boundary_info()
       ++oppFaceIndex;
     }
   }
-  //throw std::runtime_error("check");
 }
 //--------------------------------------------------------------------------
 void
@@ -1543,6 +1558,19 @@ HigherOrderQuad2DSCS::area_vector(
   areaVector[1] = -dxdr;
 }
 //--------------------------------------------------------------------------
+void HigherOrderQuad2DSCS::gij(
+  const double *coords,
+  double *gupperij,
+  double *glowerij,
+  double *deriv)
+{
+  throw std::runtime_error("Not implemented in unit test");
+//  SIERRA_FORTRAN(twod_gij)
+//    ( &nodesPerElement_,
+//      &numIntPoints_,
+//      deriv,
+//      coords, gupperij, glowerij);
+}
 //--------------------------------------------------------------------------
 HigherOrderEdge2DSCS::HigherOrderEdge2DSCS(const ElementDescription& elem)
 : MasterElement(),
@@ -1636,5 +1664,5 @@ HigherOrderEdge2DSCS::area_vector(
   areaVector[1] = -dxdr;
 }
 
-}  // namespace nalu
+}  // namespace naluUnit
 } // namespace sierra

@@ -17,12 +17,12 @@ namespace naluUnit{
 
 namespace Jacobian{
 enum Direction
-{
-  S_DIRECTION = 0,
-  T_DIRECTION = 1,
-  U_DIRECTION = 2
-};
-}
+  {
+    S_DIRECTION = 0,
+    T_DIRECTION = 1,
+    U_DIRECTION = 2
+  };
+  }
 
 class MasterElement
 {
@@ -56,6 +56,13 @@ public:
     double * error ) {
     throw std::runtime_error("grad_op not implemented");}
 
+  virtual void gij(
+    const double *coords,
+    double *gupperij,
+    double *glowerij,
+    double *deriv) {
+    throw std::runtime_error("gij not implemented");}
+
   virtual void nodal_grad_op(
     const int nelem,
     double *deriv,
@@ -70,14 +77,14 @@ public:
     double *det_j,
     double * error ) {
     throw std::runtime_error("face_grad_op not implemented; avoid this element type at open bcs, walls and symms");}
-  
+
   virtual const int * adjacentNodes() {
     throw std::runtime_error("adjacentNodes not implementedunknown bc");
     return NULL;}
 
   virtual const int * ipNodeMap(int ordinal = 0) {
-      throw std::runtime_error("ipNodeMap not implemented");
-      return NULL;}
+    throw std::runtime_error("ipNodeMap not implemented");
+    return NULL;}
 
   virtual void shape_fcn(
     double *shpfc) {
@@ -93,14 +100,14 @@ public:
 
   virtual int opposingFace(
     const int ordinal, const int node) {
-    throw std::runtime_error("opposingFace not implemented"); 
+    throw std::runtime_error("opposingFace not implemented");
     return 0; }
 
   virtual double isInElement(
     const double *elemNodalCoord,
     const double *pointCoord,
     double *isoParCoord) {
-    throw std::runtime_error("isInElement not implemented"); 
+    throw std::runtime_error("isInElement not implemented");
     return 1.0e6; }
 
   virtual void interpolatePoint(
@@ -109,7 +116,7 @@ public:
     const double *field,
     double *result) {
     throw std::runtime_error("interpolatePoint not implemented"); }
-  
+
   virtual void general_shape_fcn(
     const int numIp,
     const double *isoParCoord,
@@ -161,13 +168,14 @@ public:
   std::vector<double> intgLoc_;
   std::vector<double> intgLocShift_;
   std::vector<double> intgExpFace_;
+  std::vector<double> nodeLoc_;
   // extrusion-based scheme
   std::vector<int> faceNodeOnExtrudedElem_;
   std::vector<int> opposingNodeOnExtrudedElem_;
   std::vector<int> faceScsIpOnExtrudedElem_;
   std::vector<int> faceScsIpOnFaceEdges_;
   std::vector<double> edgeAlignedArea_;
-  
+
 };
 
 } // namespace nalu

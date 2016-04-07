@@ -55,6 +55,11 @@ public:
     stk::mesh::BulkData& mesh
   );
 
+  void populate_boundary_connectivity_map_using_super_elems(
+    const stk::mesh::BulkData& mesh,
+    const stk::mesh::PartVector& mesh_parts
+  );
+
   const ElementDescription& element_description() const { return elemDescription_; };
   stk::mesh::PartVector base_part_vector() const { return baseParts_; };
   stk::mesh::PartVector promoted_part_vector() const { return promotedParts_; };
@@ -101,6 +106,7 @@ public:
   {
     return (elemNodeMapBC_.at(elem).size());
   }
+
 private:
   class ChildNodeRequest
   {
@@ -162,10 +168,28 @@ private:
       return boost::hash_range(request.parentIds_.begin(), request.parentIds_.end());
     }
   };
+
+  struct EntityVecIdHash
+  {
+    std::size_t operator()(const std::vector<stk::mesh::EntityId>& ids) const
+    {
+      // Order-sensitive hash function hash({1,2}) != hash({2,1})
+      return boost::hash_range(ids.begin(), ids.end());
+    }
+  };
+
+
   using NodeRequests = std::unordered_set<ChildNodeRequest, RequestHash>;
+
   using ElemRelationsMap =
-      std::unordered_map<
-      stk::mesh::Entity, std::vector<stk::mesh::Entity>>;
+      std::unordered_map< stk::mesh::Entity,
+                          std::vector<stk::mesh::Entity> >;
+
+  using NodesElemMap = std::unordered_map< std::vector<stk::mesh::EntityId>,
+                                           stk::mesh::Entity,
+                                           EntityVecIdHash >;
+
+  using ExposedFaceElemMap = std::unordered_map<stk::mesh::Entity, stk::mesh::Entity>;
 
   bool check_elem_node_relations(
     const stk::mesh::BulkData& mesh,
@@ -252,7 +276,6 @@ private:
     const ElementDescription& elemDescription,
     const stk::mesh::BulkData& mesh,
     const stk::mesh::Selector& selector,
-    const NodeRequests& requests,
     ElemRelationsMap& elemNodeMap
   );
 
@@ -260,6 +283,20 @@ private:
     stk::mesh::BulkData& mesh,
     const stk::mesh::PartVector& baseElemParts,
     ElemRelationsMap& elemNodeMap) const;
+
+  NodesElemMap make_base_nodes_to_elem_map_at_boundary(
+    const ElementDescription& elemDesc,
+    const stk::mesh::BulkData& mesh,
+    const stk::mesh::PartVector& mesh_parts
+  ) const;
+
+  void
+  populate_exposed_face_to_super_elem_map(
+    const ElementDescription& elemDesc,
+    const stk::mesh::BulkData& mesh,
+    const stk::mesh::PartVector& mesh_parts,
+    const stk::mesh::PartVector& superElemParts);
+
 
   size_t count_nodes(
     const stk::mesh::PartVector& baseParts,
@@ -279,6 +316,7 @@ private:
 
   ElemRelationsMap elemNodeMapBC_;
   ElemRelationsMap nodeElemMapBC_;
+  ExposedFaceElemMap exposedFaceToSuperElemMap_;
 };
 
 } // namespace naluUnit

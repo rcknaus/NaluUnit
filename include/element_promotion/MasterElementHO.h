@@ -29,19 +29,18 @@ public:
   virtual ~HigherOrderHexSCV() {}
 
   void shape_fcn(double *shpfc) final;
-  const int * ipNodeMap(int ordinal = 0);
+  const int * ipNodeMap(int ordinal = 0) final;
 
   void determinant(
     const int nelem,
     const double *coords,
     double *volume,
-    double * error );
+    double * error ) final;
 
   const ElementDescription& elem_;
   std::vector<double> ipWeight_;
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
-  bool  reducedJacobian_;
 
 private:
   void set_interior_info();
@@ -64,7 +63,7 @@ public:
     const int nelem,
     const double *coords,
     double *areav,
-    double * error );
+    double * error ) final;
 
   void grad_op(
     const int nelem,
@@ -72,7 +71,7 @@ public:
     double *gradop,
     double *deriv,
     double *det_j,
-    double * error );
+    double * error ) final;
 
   void face_grad_op(
     const int nelem,
@@ -80,17 +79,23 @@ public:
     const double *coords,
     double *gradop,
     double *det_j,
-    double * error );
+    double * error ) final;
 
-  const int * adjacentNodes();
+  void gij(
+    const double *coords,
+    double *gupperij,
+    double *glowerij,
+    double *deriv) final;
 
-  const int * ipNodeMap(int ordinal = 0);
+  const int * adjacentNodes() final;
+
+  const int * ipNodeMap(int ordinal = 0) final;
 
   int opposingNodes(
-    const int ordinal, const int node);
+    const int ordinal, const int node) final;
 
   int opposingFace(
-    const int ordinal, const int node);
+    const int ordinal, const int node) final;
 
   const ElementDescription& elem_;
   std::vector<double> shapeFunctions_;
@@ -221,6 +226,12 @@ public:
     double *det_j,
     double * error) final;
 
+  void gij(
+    const double *coords,
+    double *gupperij,
+    double *glowerij,
+    double *deriv) final;
+
   const int * adjacentNodes() final;
 
   const int * ipNodeMap(int ordinal = 0) final;
@@ -288,7 +299,7 @@ private:
   std::vector<double> shapeDerivs_;
 };
 
-} // namespace nalu
+} // namespace naluUnit
 } // namespace Sierra
 
 #endif

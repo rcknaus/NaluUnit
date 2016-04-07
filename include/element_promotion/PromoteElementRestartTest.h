@@ -48,6 +48,7 @@ namespace sierra {
 namespace naluUnit {
 class MasterElement;
 class PromotedElementIO;
+class PromotedElement;
 }  // namespace naluUnit
 }  // namespace sierra
 
@@ -70,10 +71,16 @@ public:
   void set_output_fields();
   void output_results();
 
-  double determine_mesh_spacing();
-  bool check_dual_nodal_volume();
-  bool check_dual_nodal_volume_quad();
-  bool check_dual_nodal_volume_hex();
+  bool check_projected_nodal_gradient();
+  void compute_projected_nodal_gradient();
+  void compute_projected_nodal_gradient_interior(stk::mesh::Selector& selector);
+  void compute_projected_nodal_gradient_boundary(stk::mesh::Selector& selector);
+
+  std::unique_ptr<MasterElement>
+  create_master_subcontrol_surface_element(const ElementDescription& elem);
+
+  std::unique_ptr<MasterElement>
+  create_master_boundary_element(const ElementDescription& elem);
 
   const std::string restartFileName_;
   const std::string outputFileName_;
@@ -89,12 +96,17 @@ public:
 
   // New element classes
   std::unique_ptr<ElementDescription> elem_;
+  std::unique_ptr<MasterElement> meSCS_;
+  std::unique_ptr<MasterElement> meBC_;
+  std::unique_ptr<PromoteElement> promoteElement_;
   std::unique_ptr<PromotedElementIO> promoteIO_;
 
   //fields
   VectorFieldType* coordinates_;
   ScalarFieldType* dualNodalVolume_;
   ScalarIntFieldType* sharedElems_;
+  ScalarFieldType* q_;
+  VectorFieldType* dqdx_;
 
   // part vectors
   stk::mesh::PartVector baseElemParts_;

@@ -83,7 +83,8 @@ QuadMElementDescription::QuadMElementDescription(
   else {
     numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   }
-  nodesPerSubElement = 4;
+  nodesInBaseElement = 4;
+  nodesPerSubElement = nodesInBaseElement;
 
   set_node_connectivity();
   set_subelement_connectivity();
@@ -239,6 +240,15 @@ QuadMElementDescription::set_node_connectivity()
   for (unsigned j = 0; j < nodes1D; ++j) {
     inverseNodeMapBC[tensor_product_node_map_bc(j)] = { j };
   }
+
+  sideOrdinalMap.resize(4);
+  for (unsigned face_ordinal = 0; face_ordinal < 4; ++face_ordinal) {
+    sideOrdinalMap[face_ordinal].resize(nodes1D);
+    for (unsigned j = 0; j < nodes1D; ++j) {
+      auto& ord = inverseNodeMapBC[j];
+      sideOrdinalMap[face_ordinal][j] = faceNodeMap[face_ordinal][ord[0]];
+    }
+  }
 }
 //--------------------------------------------------------------------------
 void
@@ -281,7 +291,9 @@ HexMElementDescription::HexMElementDescription(
   else {
     numQuad = (polyOrder % 2 == 0) ? polyOrder/2 + 1 : (polyOrder+1)/2;
   }
-  nodesPerSubElement = 8;
+  nodesInBaseElement = 8;
+  nodesPerSubElement = nodesInBaseElement;
+
   set_node_connectivity();
   set_subelement_connectivity();
 
@@ -611,6 +623,15 @@ HexMElementDescription::set_node_connectivity()
   for (unsigned i = 0; i < nodes1D; ++i) {
     for (unsigned j = 0; j < nodes1D; ++j) {
       inverseNodeMapBC[tensor_product_node_map_bc(i,j)] = { i,j };
+    }
+  }
+
+  sideOrdinalMap.resize(6);
+  for (unsigned face_ordinal = 0; face_ordinal < 6; ++face_ordinal) {
+    sideOrdinalMap[face_ordinal].resize(nodes1D*nodes1D);
+    for (unsigned j = 0; j < nodes1D*nodes1D; ++j) {
+      auto& ords = inverseNodeMapBC[j];
+      sideOrdinalMap[face_ordinal][j] = faceNodeMap[face_ordinal][ords[0]+nodes1D*ords[1]];
     }
   }
 }
