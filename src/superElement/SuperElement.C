@@ -64,6 +64,8 @@ SuperElement::SuperElement()
     superElementPartName_("block_1_se"),
     superElementSurfacePartName_("surface_1_se"),
     promotedNodesPartName_("block_1_se_n"),
+    edgePartName_("block_1_edges"),
+    facePartName_("block_1_faces"),
     verboseOutput_(false),
     originalPart_(NULL),
     originalSurfacePart_(NULL),
@@ -114,9 +116,12 @@ SuperElement::execute()
   if ( nDim_ > 2 || pOrder_ > 2 )
     throw std::runtime_error("Only 2D P=2 is now supported");
   
-  // create the part that holds the super element topo; 
+  // create the part that holds the super element topo (volume and surface)
   declare_super_part();
   declare_super_part_surface();
+
+  declare_edge_part();
+  declare_face_part();
   
   // register the fields
   register_fields();
@@ -125,7 +130,7 @@ SuperElement::execute()
   // populate bulk data
   ioBroker_->populate_bulk_data();
 
-  // create the edges and faces on low order part
+  // create the edges and faces on low order part; tmp part(s) to later delete
   create_edges_and_faces();
   
   // extract coordinates
@@ -235,6 +240,25 @@ SuperElement::declare_super_part_surface()
 }
 
 //--------------------------------------------------------------------------
+//-------- declare_edge_part -----------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::declare_edge_part()
+{
+  edgePart_ = &metaData_->declare_part(edgePartName_, stk::topology::NODE_RANK);
+}
+
+//--------------------------------------------------------------------------
+//-------- declare_face_part -----------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::declare_face_part()
+{
+  if ( nDim_ == 3 )
+    facePart_ = &metaData_->declare_part(edgePartName_, stk::topology::FACE_RANK);
+}
+
+//--------------------------------------------------------------------------
 //-------- create_edges_and_faces ------------------------------------------
 //--------------------------------------------------------------------------
 void
@@ -264,59 +288,52 @@ SuperElement::create_parent_edge_ids()
     & stk::mesh::Selector(*originalPart_);
 
   stk::mesh::BucketVector const& elem_buckets =
-    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_locally_owned_union );
   for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
         ib != elem_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     
-    // extract buckets topology
-    stk::topology thisBucketsTopo = b.topology();
-
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
 
-      // extract node relations from the element
-      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+      // extract node relations from the edge and node cound
+      stk::mesh::Entity const * edge_node_rels = b.begin_nodes(k);
+      const int nodesPerEdge = b.num_nodes(k);
 
-      // iterate over the edges in the element
-      const int numEdges = thisBucketsTopo.num_edges();
-      for ( int ne = 0; ne < numEdges; ++ne ) {
+      // sanity check on number or nodes
+      ThrowAssert( 2 == nodesPerEdge );
 
-        // although we are expecting a P=1 element, let's make this general for now
-        const int nodesPerEdge = thisBucketsTopo.edge_topology().num_nodes();
-        
-        // extract the local element ids for this edge on this element
-        std::vector<int> edgeNodeOrdinals(nodesPerEdge);
-        thisBucketsTopo.edge_node_ordinals(ne,&edgeNodeOrdinals[0]);
+      // left and right node ids
+      stk::mesh::EntityId nodeIdL = bulkData_->identifier(edge_node_rels[0]);
+      stk::mesh::EntityId nodeIdR = bulkData_->identifier(edge_node_rels[1]);
 
-        // vector to hold the edge nodes
-        stk::mesh::EntityIdVector edgeCentroidVec(nodesPerEdge);
-        for ( int ni = 0; ni < nodesPerEdge; ++ni ) {
-          // extract local node id
-          const int thisNode = edgeNodeOrdinals[ni];
-          // extract node
-          stk::mesh::Entity node = node_rels[thisNode];
-          edgeCentroidVec[ni] = bulkData_->identifier(node);
-        }
-
-        // sort the nodes and push back
-        std::sort(edgeCentroidVec.begin(), edgeCentroidVec.end());
-        parentEdgeIds_.push_back(edgeCentroidVec);
+      // vector to hold face nodes
+      stk::mesh::EntityIdVector edgeCentroidVec(nodesPerEdge,0);
+    
+      // sort from low to high
+      if ( nodeIdL > nodeIdR ) {
+        edgeCentroidVec[0] = nodeIdR;
+        edgeCentroidVec[1] = nodeIdL;
       }
+      else {
+        edgeCentroidVec[0] = nodeIdL;
+        edgeCentroidVec[1] = nodeIdR;
+      }
+
+      // tell the 
+      if ( verboseOutput_ ) 
+        NaluEnv::self().naluOutputP0() << " Edge # " << k << " with global id " << bulkData_->identifier(b[k]) 
+                                       << " L/R ids " << nodeIdL << "/" << nodeIdR << std::endl;
+
+      // push back 
+      parentEdgeIds_.push_back(edgeCentroidVec);
     }
   }
 
-  // sort the full parentId vector. At this point; we may have duplicate entries
-  std::sort(parentEdgeIds_.begin(), parentEdgeIds_.end());
- 
-  // prune for unique pairs
-  std::vector<stk::mesh::EntityIdVector>::iterator pruneEdgeIdsIter
-    = std::unique(parentEdgeIds_.begin(), parentEdgeIds_.end());
- 
-  // now erase
-  parentEdgeIds_.erase(pruneEdgeIdsIter, parentEdgeIds_.end());
+  // report number of edges
+  if ( verboseOutput_ )
+    NaluEnv::self().naluOutputP0() << "... number of edges: " << parentEdgeIds_.size() << std::endl;
 }
-
 
 //--------------------------------------------------------------------------
 //-------- create_parent_face_ids ------------------------------------------
@@ -836,11 +853,12 @@ void
 SuperElement::initialize_fields()
 {
   // just check on whether or not the nodes are all here on the superElementPart_; define gold standard for three element quad4 mesh
-  int goldElemNodalOrder[27] = {1, 2, 4, 8, 9, 11, 15, 10, 19,
-                          8, 4, 5, 7, 15, 14, 16, 18, 21,
-                          7, 5, 3, 6, 16, 12, 13, 17, 20};
+  int goldElemNodalOrder[27] = {1, 2, 4, 8, 12, 13, 9, 16, 19,
+                                8, 4, 5, 7, 9, 14, 10, 17, 21,
+                                7, 5, 3, 6, 10, 15, 11, 18, 20};
   int goldElemNodalOrderCount = 0;
   bool testElemPassed = true;
+
   // define some common selectors
   stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
     & stk::mesh::Selector(*superElementPart_);

@@ -54,9 +54,13 @@ public:
 
   void execute();
 
-  // home for super part
+  // part for super part
   void declare_super_part();
   void declare_super_part_surface();
+
+  // part for edges and faces
+  void declare_edge_part();
+  void declare_face_part();
 
   // create all of the ids
   void create_parent_edge_ids();
@@ -117,6 +121,10 @@ public:
   // the set of nodes that are promoted
   std::string promotedNodesPartName_;
   
+  // name for the new edges and faces created
+  std::string edgePartName_;
+  std::string facePartName_;
+
   // verbosity level for output
   const bool verboseOutput_;
 
