@@ -107,7 +107,19 @@ namespace naluUnit{
 
     stk::mesh::PartVector elemParts;
     std::copy_if(parts.begin(), parts.end(), std::back_inserter(elemParts), [](stk::mesh::Part* p) {
-      return (p->topology().rank() == stk::topology::ELEM_RANK);
+      return (p->topology().rank() == stk::topology::ELEM_RANK
+           && p->topology() < stk::topology::SUPERELEMENT_START);
+    });
+    return elemParts;
+  }
+  //--------------------------------------------------------------------------
+  stk::mesh::PartVector only_super_elem_parts(const stk::mesh::PartVector& parts)
+  {
+    ThrowAssert(part_vector_is_valid(parts));
+
+    stk::mesh::PartVector elemParts;
+    std::copy_if(parts.begin(), parts.end(), std::back_inserter(elemParts), [](stk::mesh::Part* p) {
+      return (p->topology() >= stk::topology::SUPERELEMENT_START);
     });
     return elemParts;
   }

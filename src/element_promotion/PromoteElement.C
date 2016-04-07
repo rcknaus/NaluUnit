@@ -264,7 +264,7 @@ PromoteElement::parallel_communicate_ids(
           comm_spec.recv_buffer(i).unpack(parentId);
         }
 
-        // Check that this proc has a reques to create nodes on the
+        // Check that this proc has a request to create nodes on the
         // edge/face sent from another proc
         auto iter = requests.find(ChildNodeRequest{parentIds});
         bool hasParents = iter != requests.end();

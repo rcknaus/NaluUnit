@@ -85,7 +85,7 @@ PromoteElementTest::execute()
     elemType_ = "Hex" + std::to_string(nodes);
   }
   coarseOutputName_ = "test_output/coarse_output/coarse_" + elemType_ + ".e";
-  restartName_ = "test_output/" + elemType_ + ".rs";
+  restartName_ = "test_output/restart/" + elemType_ + ".rs";
   fineOutputName_   = "test_output/fine_output/fine_" + elemType_ + ".e";
 
   NaluEnv::self().naluOutputP0() << "Promoting to a '" << elemType_
@@ -1193,7 +1193,9 @@ PromoteElementTest::set_output_fields()
       ioBroker_->create_output_mesh(restartName_, stk::io::WRITE_RESTART);
 
   ioBroker_->add_field(resultsFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
+
   ioBroker_->add_field(restartFileIndex_, *dualNodalVolume_, dualNodalVolume_->name());
+  ioBroker_->add_field(restartFileIndex_, *sharedElems_, sharedElems_->name());
 
   promoteIO_ = make_unique<PromotedElementIO>(
     *elem_,
