@@ -11,6 +11,7 @@
 #include <element_promotion/PromoteElementTest.h>
 #include <element_promotion/QuadratureRuleTest.h>
 #include <element_promotion/MasterElementHOTest.h>
+#include <element_promotion/PromoteElementRestartTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -107,6 +108,8 @@ int main( int argc, char ** argv )
   const bool doPromotionQuadSGL = true;
   const bool doPromotionHexGaussLegendre = true;
   const bool doPromotionHexSGL = true;
+  const bool doRestartQuad = true;
+  const bool doRestartHex = true;
 
   const int maxQuadOrder = 7;
   const int maxHexOrder = 7;
@@ -121,7 +124,6 @@ int main( int argc, char ** argv )
   //std::string hexMesh = "test_meshes/thex8_8.g";
   std::string hexMesh = "test_meshes/hex8_4.g";
   //==============================
-
 
   if ( doQuadrature ) {
     sierra::naluUnit::QuadratureRuleTest().execute();
@@ -160,6 +162,24 @@ int main( int argc, char ** argv )
   if (doPromotionHexSGL) {
     for (int j = 2; j <= maxHexOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "SGL").execute();
+    }
+  }
+
+  if (doRestartQuad)  {
+    for (int j = 2; j <= maxQuadOrder; ++j) {
+      unsigned nodesPerElem = (j+1)*(j+1);
+      std::string restartName = "test_output/restart/Quad" + std::to_string(nodesPerElem) + ".rs";
+      std::string outputName = "test_output/restart/Quad" + std::to_string(nodesPerElem) + "_rs.e";
+      sierra::naluUnit::PromoteElementRestartTest(restartName,outputName).execute();
+    }
+  }
+
+  if (doRestartHex)  {
+    for (int j = 2; j <= maxHexOrder; ++j) {
+      unsigned nodesPerElem = (j+1)*(j+1)*(j+1);
+      std::string restartName = "test_output/restart/Hex" + std::to_string(nodesPerElem) + ".rs";
+      std::string outputName = "test_output/restart/Hex" + std::to_string(nodesPerElem) + "_rs.e";
+      sierra::naluUnit::PromoteElementRestartTest(restartName,outputName).execute();
     }
   }
 
