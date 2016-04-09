@@ -144,6 +144,9 @@ SuperElement::execute()
   // create nodes
   create_nodes();
   
+  // for edges that have multiple processor owners, consolidate ids
+  consolidate_edge_node_ids_at_boundaries();
+  
   // create the element
   create_elements();
   const bool tryMe = false;
@@ -283,14 +286,14 @@ SuperElement::delete_edges_and_faces()
 void
 SuperElement::create_parent_edge_ids()
 {
-  // define some common selectors
+  // selector based on locally owned and shared edges
   stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
-    & stk::mesh::Selector(*originalPart_);
+  & stk::mesh::Selector(*originalPart_) | metaData_->globally_shared_part();
 
-  stk::mesh::BucketVector const& elem_buckets =
+  stk::mesh::BucketVector const& edge_buckets =
     bulkData_->get_buckets(stk::topology::EDGE_RANK, s_locally_owned_union );
-  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
-        ib != elem_buckets.end() ; ++ib ) {
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets.begin();
+        ib != edge_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     
@@ -324,9 +327,14 @@ SuperElement::create_parent_edge_ids()
       if ( verboseOutput_ ) 
         NaluEnv::self().naluOutputP0() << " Edge # " << k << " with global id " << bulkData_->identifier(b[k]) 
                                        << " L/R ids " << nodeIdL << "/" << nodeIdR << std::endl;
-
       // push back 
       parentEdgeIds_.push_back(edgeCentroidVec);
+      
+      // finally, check to see if the edge is on a processor boundary; for now just warn if this is a parallel run
+      std::vector<int> sharedProcs;
+      bulkData_->comm_shared_procs({stk::topology::EDGE_RANK, bulkData_->identifier(b[k])}, sharedProcs);
+      if ( sharedProcs.size() > 1 )
+        NaluEnv::self().naluOutputP0() << "Wait, more than one processor shares this edge" << std::endl;
     }
   }
 
@@ -549,6 +557,15 @@ SuperElement::create_nodes()
   
 }
 
+//--------------------------------------------------------------------------
+//-------- consolidate_edge_node_ids_at_boundaries ------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::consolidate_edge_node_ids_at_boundaries()
+{
+  // nothing yet
+}
+  
 //--------------------------------------------------------------------------
 //-------- create_elements -------------------------------------------------
 //--------------------------------------------------------------------------

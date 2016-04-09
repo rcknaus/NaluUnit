@@ -69,6 +69,8 @@ public:
 
   void create_nodes();
 
+  void consolidate_edge_node_ids_at_boundaries();
+  
   void create_elements();
   void create_elements_surface();
 
