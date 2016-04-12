@@ -14,6 +14,7 @@
 #include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/FieldParallel.hpp>
 #include <stk_mesh/base/GetBuckets.hpp>
+#include <stk_mesh/base/GetEntities.hpp>
 #include <stk_mesh/base/Part.hpp>
 #include <stk_mesh/base/Selector.hpp>
 #include <stk_mesh/base/FEMHelpers.hpp>
@@ -73,7 +74,10 @@ SuperElement::SuperElement()
     superElementSurfacePart_(NULL),
     promotedNodesPart_(NULL),
     edgePart_(NULL),
-    facePart_(NULL)
+    facePart_(NULL),
+    numberOfEdges_(0),
+    numberOfFaces_(0),
+    numberOfElements_(0)
 {
   // nothing to do
 }
@@ -95,7 +99,10 @@ void
 SuperElement::execute() 
 {
   NaluEnv::self().naluOutputP0() << "Welcome to the SuperElement unit test" << std::endl;
-  
+  NaluEnv::self().naluOutputP0() << std::endl;
+  NaluEnv::self().naluOutputP0() << "SuperElement Quad4 Unit Tests" << std::endl;
+  NaluEnv::self().naluOutputP0() << "-----------------------------" << std::endl;
+
   stk::ParallelMachine pm = NaluEnv::self().parallel_comm();
   
   // news for mesh constructs
@@ -131,15 +138,16 @@ SuperElement::execute()
   ioBroker_->populate_bulk_data();
 
   // create the edges and faces on low order part; tmp part(s) to later delete
-  create_edges_and_faces();
+  create_edges();
+  create_faces();
   
   // extract coordinates
   coordinates_ = metaData_->get_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates");
   
   // create the parent id maps
-  create_parent_edge_ids();
-  create_parent_face_ids();
-  create_parent_element_ids();
+  size_of_edges();
+  size_of_faces();
+  size_of_elements();
 
   // create nodes
   create_nodes();
@@ -154,13 +162,16 @@ SuperElement::execute()
     create_elements_surface();
   }
   else {
-    NaluEnv::self().naluOutputP0() << "..Unit Test Notes: " << std::endl;
-    NaluEnv::self().naluOutputP0() << "....Need to figure out how to provide the super element topo with # sides, faces, etc for surface creation"
-                                   << std::endl;
+    if ( verboseOutput_ ) {
+      NaluEnv::self().naluOutputP0() << "..Unit Test Notes: " << std::endl;
+      NaluEnv::self().naluOutputP0() << "....Need to figure out how to provide the super element topo with # sides, faces, etc for surface creation"
+                                     << std::endl;
+    }
   }
   
   // delete the edges and faces
-  delete_edges_and_faces();
+  delete_edges();
+  delete_faces();
   
   // deal with output mesh
   set_output_fields();
@@ -262,198 +273,169 @@ SuperElement::declare_face_part()
 }
 
 //--------------------------------------------------------------------------
-//-------- create_edges_and_faces ------------------------------------------
+//-------- create_edges ----------------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::create_edges_and_faces()
+SuperElement::create_edges()
 {
   stk::mesh::create_edges(*bulkData_, stk::mesh::Selector(*originalPart_), edgePart_);
-  stk::mesh::create_faces(*bulkData_, stk::mesh::Selector(*originalPart_), facePart_);
 }
 
 //--------------------------------------------------------------------------
-//-------- delete_edges_and_faces ------------------------------------------
+//-------- delete_edges ----------------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::delete_edges_and_faces()
+SuperElement::delete_edges()
+{
+  // complex delettion...
+
+  // check to see how many edges remain in the original part now...
+  size_t numberOfRemainingEdges = 0;
+  // selector based on locally owned and shared edges
+  stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_);
+  
+  stk::mesh::BucketVector const& edge_remaining_buckets =
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge );
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_remaining_buckets.begin();
+        ib != edge_remaining_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();    
+    // increment size
+    numberOfRemainingEdges += length; 
+  }
+  
+  // HACK... there should be two removed from the edge part; ten should live in the original part
+  const bool testEdgeCount = numberOfRemainingEdges == 10 ? true : false;
+  
+  if (verboseOutput_ )
+    NaluEnv::self().naluOutputP0() << "remaining edges: " << numberOfRemainingEdges << std::endl;
+  
+  if ( testEdgeCount )
+    NaluEnv::self().naluOutputP0() << "Remaining Edge Count Test   PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Remaining Edge Count Test   FAILED" << std::endl;
+}
+
+//--------------------------------------------------------------------------
+//-------- create_faces ------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::create_faces()
+{
+  if ( nDim_ == 3 )
+    stk::mesh::create_faces(*bulkData_, stk::mesh::Selector(*originalPart_), facePart_);
+}
+
+//--------------------------------------------------------------------------
+//-------- delete_faces ------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::delete_faces()
 {
   // delete it; not yet
 }
 
 //--------------------------------------------------------------------------
-//-------- create_parent_edge_ids ------------------------------------------
+//-------- size_of_edges ---------------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::create_parent_edge_ids()
-{
+SuperElement::size_of_edges()
+{ 
+  // size edge count
+  numberOfEdges_ = 0;
+
   // selector based on locally owned and shared edges
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
-  & stk::mesh::Selector(*originalPart_) | metaData_->globally_shared_part();
+  stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_);
 
   stk::mesh::BucketVector const& edge_buckets =
-    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_locally_owned_union );
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge );
   for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets.begin();
         ib != edge_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
-    const stk::mesh::Bucket::size_type length   = b.size();
-    
+    const stk::mesh::Bucket::size_type length   = b.size();    
+
+    // increment size
+    numberOfEdges_ += length;
+      
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
-
-      // extract node relations from the edge and node cound
-      stk::mesh::Entity const * edge_node_rels = b.begin_nodes(k);
-      const int nodesPerEdge = b.num_nodes(k);
-
-      // sanity check on number or nodes
-      ThrowAssert( 2 == nodesPerEdge );
-
-      // left and right node ids
-      stk::mesh::EntityId nodeIdL = bulkData_->identifier(edge_node_rels[0]);
-      stk::mesh::EntityId nodeIdR = bulkData_->identifier(edge_node_rels[1]);
-
-      // vector to hold face nodes
-      stk::mesh::EntityIdVector edgeCentroidVec(nodesPerEdge,0);
-    
-      // sort from low to high
-      if ( nodeIdL > nodeIdR ) {
-        edgeCentroidVec[0] = nodeIdR;
-        edgeCentroidVec[1] = nodeIdL;
-      }
-      else {
-        edgeCentroidVec[0] = nodeIdL;
-        edgeCentroidVec[1] = nodeIdR;
-      }
-
-      // tell the 
-      if ( verboseOutput_ ) 
-        NaluEnv::self().naluOutputP0() << " Edge # " << k << " with global id " << bulkData_->identifier(b[k]) 
-                                       << " L/R ids " << nodeIdL << "/" << nodeIdR << std::endl;
-      // push back 
-      parentEdgeIds_.push_back(edgeCentroidVec);
-      
-      // finally, check to see if the edge is on a processor boundary; for now just warn if this is a parallel run
-      std::vector<int> sharedProcs;
-      bulkData_->comm_shared_procs({stk::topology::EDGE_RANK, bulkData_->identifier(b[k])}, sharedProcs);
-      if ( sharedProcs.size() > 1 )
-        NaluEnv::self().naluOutputP0() << "Wait, more than one processor shares this edge" << std::endl;
+      // finally, determine the the set of processors that this edge touches; defines commmunication pattern for nodes
+      std::vector<int> sharedProcsEdge;
+      bulkData_->comm_shared_procs({stk::topology::EDGE_RANK, bulkData_->identifier(b[k])}, sharedProcsEdge);
+      std::sort(sharedProcsEdge.begin(), sharedProcsEdge.end());
+      sharedProcsEdge_.push_back(sharedProcsEdge);
     }
   }
 
-  // report number of edges
-  if ( verboseOutput_ )
-    NaluEnv::self().naluOutputP0() << "... number of edges: " << parentEdgeIds_.size() << std::endl;
+  if (verboseOutput_ )
+    NaluEnv::self().naluOutputP0() << "size of edges: " << numberOfEdges_ << std::endl;
+
+  const bool testEdge = numberOfEdges_ == 10 ? true : false;
+  if ( testEdge )
+    NaluEnv::self().naluOutputP0() << "Total Edge Count Test       PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Total Edge Count Test       FAILED" << std::endl;
 }
 
 //--------------------------------------------------------------------------
-//-------- create_parent_face_ids ------------------------------------------
+//-------- size_of_faces ---------------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::create_parent_face_ids()
+SuperElement::size_of_faces()
 {
+  // size number of faces; not ready for 3D....
+  numberOfFaces_ = 0;
+
   // define some common selectors
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
-    & stk::mesh::Selector(*originalPart_);
+  stk::mesh::Selector s_face = stk::mesh::Selector(*originalPart_);
 
-  stk::mesh::BucketVector const& elem_buckets =
-    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
-  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
-        ib != elem_buckets.end() ; ++ib ) {
+  stk::mesh::BucketVector const& face_buckets =
+    bulkData_->get_buckets(stk::topology::FACE_RANK, s_face );
+  for ( stk::mesh::BucketVector::const_iterator ib = face_buckets.begin();
+        ib != face_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
-    const stk::mesh::Bucket::size_type length   = b.size();
-    
-    // extract buckets topology
-    stk::topology thisBucketsTopo = b.topology();
-
-    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-            
-      // extract node relations from the element
-      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
-
-      // iterate over the faces in the element
-      const int numFaces = thisBucketsTopo.num_faces();
-      for ( int nf = 0; nf < numFaces; ++nf ) {
-
-        // although we are expecting quads or hexes (all nodes per face are the same) make this general for now
-        const int nodesPerFace = thisBucketsTopo.face_topology(nf).num_nodes();
-        std::vector<int> faceNodeOrdinals(nodesPerFace);
-        thisBucketsTopo.edge_node_ordinals(nf,&faceNodeOrdinals[0]);
-          
-        // vector to hold face nodes
-        stk::mesh::EntityIdVector faceCentroidVec;
-        for ( int ni = 0; ni < nodesPerFace; ++ni ) {
-          // extract local node id
-          const int thisNode = faceNodeOrdinals[ni];
-          // extract node
-          stk::mesh::Entity node = node_rels[thisNode];
-          faceCentroidVec[ni] = bulkData_->identifier(node);
-        }
-
-        // sort the nodes and push back
-        std::sort(faceCentroidVec.begin(), faceCentroidVec.end());
-        parentFaceIds_.push_back(faceCentroidVec);
-      }
-    }
+    const stk::mesh::Bucket::size_type length   = b.size();    
+    // increment size
+    numberOfFaces_ += length;
   }
-
-  // sort the full parentId vector. At this point; we may have duplicate entries
-  std::sort(parentFaceIds_.begin(), parentFaceIds_.end());
-
-  // prune for unique pairs
-  std::vector<stk::mesh::EntityIdVector>::iterator pruneFaceIdsIter
-    = std::unique(parentFaceIds_.begin(), parentFaceIds_.end());
-
-  // now erase
-  parentFaceIds_.erase(pruneFaceIdsIter, parentFaceIds_.end());  
-}
-
-
-//--------------------------------------------------------------------------
-//-------- create_parent_element_ids ---------------------------------------
-//--------------------------------------------------------------------------
-void
-SuperElement::create_parent_element_ids()
-{
-  // define some common selectors
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
-    & stk::mesh::Selector(*originalPart_);
-
-  stk::mesh::BucketVector const& elem_buckets =
-    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
-  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
-        ib != elem_buckets.end() ; ++ib ) {
-    stk::mesh::Bucket & b = **ib ;
-    const stk::mesh::Bucket::size_type length   = b.size();
-    
-    // extract buckets topology
-    stk::topology thisBucketsTopo = b.topology();
-
-    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
-      
-      // extract node relations
-      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
-
-      // iterate over the nodes in the element
-      int numNodes = b.num_nodes(k);
-      stk::mesh::EntityIdVector volumeCentroidVec(numNodes);
-      for ( int ni = 0; ni < numNodes; ++ni ) {
-        stk::mesh::Entity node = node_rels[ni];
-        volumeCentroidVec[ni] = bulkData_->identifier(node);
-      }
-
-      // sort the nodes and push back
-      std::sort(volumeCentroidVec.begin(), volumeCentroidVec.end());
-      parentElemIds_.push_back(volumeCentroidVec);
-    }
-  }
-
-  // sort the full parentId vector. At this point; we may have duplicate entries
-  std::sort(parentElemIds_.begin(), parentElemIds_.end());
- 
-  // prune for unique pairs
-  std::vector<stk::mesh::EntityIdVector>::iterator pruneElemIdsIter
-    = std::unique(parentElemIds_.begin(), parentElemIds_.end());
   
-  // now erase
-  parentElemIds_.erase(pruneElemIdsIter, parentElemIds_.end());
+  if (verboseOutput_ )
+    NaluEnv::self().naluOutputP0() << "size of faces: " << numberOfFaces_ << std::endl;
+
+  if ( numberOfFaces_ > 0 )
+    throw std::runtime_error("size_of_faces: greater than zero; 3D not ready for prime time");  
+}
+
+//--------------------------------------------------------------------------
+//-------- size_of_elements ------------------------------------------------
+//--------------------------------------------------------------------------
+void
+SuperElement::size_of_elements()
+{
+  // size element count
+  numberOfElements_ = 0;
+
+  // define some common selectors; want locally owned here
+  stk::mesh::Selector s_elem = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*originalPart_);
+
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_elem );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    // increment size
+    numberOfElements_ += length;   
+  }
+
+  if (verboseOutput_ )
+    NaluEnv::self().naluOutputP0() << "size of elems: " << numberOfElements_ << std::endl;
+
+  const bool testElem = numberOfElements_ == 3 ? true : false;
+  if ( testElem )
+    NaluEnv::self().naluOutputP0() << "Total Elem Count Test       PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Total Elem Count Test       FAILED" << std::endl;
 }
 
 //--------------------------------------------------------------------------
@@ -469,9 +451,9 @@ SuperElement::create_nodes()
   const int pFaceFac = pM1Order*pM1Order;
   
   const int numPromotedNodes
-    = parentElemIds_.size()*pElemFac
-    + parentEdgeIds_.size()*pEdgeFac
-    + parentFaceIds_.size()*pFaceFac;
+    = numberOfEdges_*pEdgeFac
+    + numberOfFaces_*pFaceFac 
+    + numberOfElements_*pElemFac;
 
   // okay, now ask
   bulkData_->modification_begin();
@@ -479,7 +461,7 @@ SuperElement::create_nodes()
   // generate new ids; number of points is simple for now... all of the extra nodes from P=1 to P=2
   stk::mesh::EntityIdVector availableNodeIds(numPromotedNodes);
   bulkData_->generate_new_ids(stk::topology::NODE_RANK, numPromotedNodes, availableNodeIds);
-
+  
   // declare the entity on this rank (rank is determined by calling declare_entity on this rank)
   for (int i = 0; i < numPromotedNodes; ++i) {
     stk::mesh::Entity theNode 
@@ -488,73 +470,99 @@ SuperElement::create_nodes()
   }
 
   bulkData_->modification_end();
-    
+      
   // fill in std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentNodesMap_
   int promotedNodesVecCount = 0;
-  for ( size_t k = 0; k < parentEdgeIds_.size(); ++k ) {
-    stk::mesh::EntityIdVector &theEntIdVec = parentEdgeIds_[k];
-    // extract node and fill in coordinate
-    stk::mesh::Entity edgeNode = promotedNodesVec_[promotedNodesVecCount];
-    double * edgeCoords = stk::mesh::field_data(*coordinates_, edgeNode);
+
+  // edge selectors; locally owned and shared edges
+  stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_);
+
+  stk::mesh::BucketVector const& edge_buckets =
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge );
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets.begin();
+        ib != edge_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
     
-    // find mean distance between the nodes
-    std::vector<double>tmpCoord(nDim_,0.0);
-    for ( size_t j = 0; j < theEntIdVec.size(); ++j ) {
-      stk::mesh::Entity theNode = bulkData_->get_entity(stk::topology::NODE_RANK, theEntIdVec[j]);
-      double * edgeNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
-      for ( int i = 0; i < nDim_; ++i )
-        tmpCoord[i] += edgeNodeCoords[i]*0.5;
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
+      
+      // get edge and edge id
+      stk::mesh::Entity edge = b[k];
+      const stk::mesh::EntityId edgeId = bulkData_->identifier(edge);
+
+      // extract node relations from the edge and node count
+      stk::mesh::Entity const * edge_node_rels =  bulkData_->begin_nodes(edge);
+      const int nodesPerEdge = b.num_nodes(k);
+
+      // sanity check on number or nodes
+      ThrowAssert( 2 == nodesPerEdge );
+
+      // left, right and center node along the edge
+      stk::mesh::Entity nodeL = edge_node_rels[0];
+      stk::mesh::Entity nodeR = edge_node_rels[1];
+      stk::mesh::Entity nodeC = promotedNodesVec_[promotedNodesVecCount];
+      
+      const double * edgeCoordsL = stk::mesh::field_data(*coordinates_, nodeL);
+      const double * edgeCoordsR = stk::mesh::field_data(*coordinates_, nodeR);
+      double * edgeCoordsC = stk::mesh::field_data(*coordinates_, nodeC);
+      
+      // find mean distance between the nodes
+      for ( int j = 0; j < nDim_; ++j )
+        edgeCoordsC[j] = (edgeCoordsL[j] + edgeCoordsR[j])*0.5;
+      
+      // store off map
+      parentEdgeNodesMap_[edgeId] = nodeC;
+      
+      ++promotedNodesVecCount;
     }
-    for ( int i = 0; i < nDim_; ++i )
-      edgeCoords[i] = tmpCoord[i];
-    
-    parentEdgeNodesMap_[theEntIdVec] = edgeNode;
-    ++promotedNodesVecCount;
   }
 
-  for ( size_t k = 0; k < parentFaceIds_.size(); ++k ) {
-    stk::mesh::EntityIdVector &theEntIdVec = parentFaceIds_[k];
-    
-    // extract node and fill in coordinate
-    stk::mesh::Entity faceNode = promotedNodesVec_[promotedNodesVecCount];
-    double * faceCoords = stk::mesh::field_data(*coordinates_, faceNode);
-    
-    // find mean distance between the nodes
-    std::vector<double>tmpCoord(nDim_,0.0);
-    for ( size_t j = 0; j < theEntIdVec.size(); ++j ) {
-      stk::mesh::Entity theNode = bulkData_->get_entity(stk::topology::NODE_RANK, theEntIdVec[j]);
-      double * faceNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
-      for ( int i = 0; i < nDim_; ++i )
-        tmpCoord[i] += faceNodeCoords[i]*0.25;
-    }
-    for ( int i = 0; i < nDim_; ++i )
-      faceCoords[i] = tmpCoord[i];
-
-    parentFaceNodesMap_[theEntIdVec] = faceNode;
-    ++promotedNodesVecCount;
-  }
-
-  for ( size_t k = 0; k < parentElemIds_.size(); ++k ) {
-    stk::mesh::EntityIdVector &theEntIdVec = parentElemIds_[k];
-    // extract node and fill in coordinate
-    stk::mesh::Entity elemNode = promotedNodesVec_[promotedNodesVecCount];
-    double * elemCoords = stk::mesh::field_data(*coordinates_, elemNode);
-    
-    // find mean distance between the nodes
-    std::vector<double>tmpCoord(nDim_,0.0);
-    for ( size_t j = 0; j < theEntIdVec.size(); ++j ) {
-      stk::mesh::Entity theNode = bulkData_->get_entity(stk::topology::NODE_RANK, theEntIdVec[j]);
-      double * elemNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
-      for ( int i = 0; i < nDim_; ++i )
-        tmpCoord[i] += elemNodeCoords[i]*0.25;
-    }
-    for ( int i = 0; i < nDim_; ++i )
-      elemCoords[i] = tmpCoord[i];
-
-    parentElemNodesMap_[theEntIdVec] = elemNode;
-    ++promotedNodesVecCount;
-  }
+  // fill in faces
   
+  // element selectors; locally owned only
+  stk::mesh::Selector s_elem = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*originalPart_);
+  
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_elem );
+  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
+        ib != elem_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get element and element id
+      stk::mesh::Entity elem = b[k];
+      const stk::mesh::EntityId elemId = bulkData_->identifier(elem);
+      
+      // extract node relations
+      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+
+      // iterate over the nodes in the element
+      int numNodes = b.num_nodes(k);
+
+      // extract element center noce
+      stk::mesh::Entity nodeC = promotedNodesVec_[promotedNodesVecCount];
+      double * elemCoordsC = stk::mesh::field_data(*coordinates_, nodeC);
+    
+      // hacked center coords calulation
+      std::vector<double>tmpCoord(nDim_,0.0);
+      for ( int ni = 0; ni < numNodes; ++ni ) {
+        stk::mesh::Entity theNode = node_rels[ni];
+        double * elemNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
+        for ( int i = 0; i < nDim_; ++i )
+          tmpCoord[i] += elemNodeCoords[i]*0.25;
+      }
+      
+      for ( int i = 0; i < nDim_; ++i )
+        elemCoordsC[i] = tmpCoord[i];
+      
+      parentElemNodesMap_[elemId] = nodeC;
+      
+      ++promotedNodesVecCount;
+    }  
+  }
 }
 
 //--------------------------------------------------------------------------
@@ -563,7 +571,7 @@ SuperElement::create_nodes()
 void
 SuperElement::consolidate_edge_node_ids_at_boundaries()
 {
-  // nothing yet
+  // nothing
 }
   
 //--------------------------------------------------------------------------
@@ -572,82 +580,63 @@ SuperElement::consolidate_edge_node_ids_at_boundaries()
 void
 SuperElement::create_elements()
 {
-  // find total number of locally owned elements
-  size_t numNewElem = 0;
-  
-  // define some common selectors
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+
+  // define some common selectors; want locally owned here
+  stk::mesh::Selector s_elem = metaData_->locally_owned_part()
     & stk::mesh::Selector(*originalPart_);
-    
-  stk::mesh::BucketVector const& elem_buckets =
-  bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
-  for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
-       ib != elem_buckets.end() ; ++ib ) {
-    stk::mesh::Bucket & b = **ib ;
-    const stk::mesh::Bucket::size_type length   = b.size();
-    numNewElem += length;
-  }
   
-  // now loop over elements and assign the new node connectivity
+  stk::mesh::BucketVector const& elem_buckets =
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_elem );
+
+  // elements and assign the new node connectivity
   bulkData_->modification_begin();
   
   // generate new ids; one per bucket loop
-  stk::mesh::EntityIdVector availableElemIds(numNewElem);
-  bulkData_->generate_new_ids(stk::topology::ELEM_RANK, numNewElem, availableElemIds);
+  stk::mesh::EntityIdVector availableElemIds(numberOfElements_);
+  bulkData_->generate_new_ids(stk::topology::ELEM_RANK, numberOfElements_, availableElemIds);
 
   // generic iterator for parentNodesMap_ and placeholder for the found node
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity>::iterator iterFindMap;
+  std::map<stk::mesh::EntityId, stk::mesh::Entity>::iterator iterFindMap;
   stk::mesh::Entity foundNode;
-
+  
   // declare id counter
   size_t availableElemIdCounter = 0;
   for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
          ib != elem_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
-    
-    // extract buckets topology
-    stk::topology thisBucketsTopo = b.topology();
-        
+
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       
       // define the vector that will hold the connected nodes for this element
       stk::mesh::EntityIdVector connectedNodesIdVec;
       
-      // extract node relations for this element
-      stk::mesh::Entity const * node_rels = b.begin_nodes(k);
+      // get element and element id
+      stk::mesh::Entity elem = b[k];
+      const stk::mesh::EntityId elemId = bulkData_->identifier(elem);
       
-      // first, standard nodes on the lower order element
-      int numNodes = b.num_nodes(k);
-      for ( int ni = 0; ni < numNodes; ++ni ) {
-        stk::mesh::Entity node = node_rels[ni];
+      // extract node relations amd mpde count
+      stk::mesh::Entity const * elem_node_rels =  bulkData_->begin_nodes(elem);
+      int numElemNodes = b.num_nodes(k);
+
+      // first, standard nodes on the lower order elements
+      for ( int ni = 0; ni < numElemNodes; ++ni ) {
+        stk::mesh::Entity node = elem_node_rels[ni];
         connectedNodesIdVec.push_back(bulkData_->identifier(node));
       }
       
       // second, nodes in the center of the edges
-      const int numEdges = thisBucketsTopo.num_edges();
+      stk::mesh::Entity const * elem_edge_rels = bulkData_->begin_edges(elem);
+      int numEdges = b.num_edges(k);
+ 
       for ( int ne = 0; ne < numEdges; ++ne ) {
-        // although we are expecting a P=1 element, let's make this general for now
-        const int nodesPerEdge = thisBucketsTopo.edge_topology().num_nodes();
-                
-        // extract the local element ids for this edge on this element
-        std::vector<int> edgeNodeOrdinals(nodesPerEdge);
-        thisBucketsTopo.edge_node_ordinals(ne,&edgeNodeOrdinals[0]);
-                
-        // vector to hold the edge nodes
-        stk::mesh::EntityIdVector edgeCentroidVec(nodesPerEdge);
-        for ( int ni = 0; ni < nodesPerEdge; ++ni ) {
-          // extract local node id
-          const int thisNodeId = edgeNodeOrdinals[ni];
-          // extract node
-          stk::mesh::Entity node = node_rels[thisNodeId];
-          edgeCentroidVec[ni] = bulkData_->identifier(node);
-        }
-                
-        // sort the nodes
-        std::sort(edgeCentroidVec.begin(), edgeCentroidVec.end());
+         
+        // extract the edge and edge id
+        stk::mesh::Entity edge = elem_edge_rels[ne];
+        stk::mesh::EntityId edgeId = bulkData_->identifier(edge);
+        
         // find the edge centroid node(s)
-        iterFindMap = parentEdgeNodesMap_.find(edgeCentroidVec);
+        iterFindMap = parentEdgeNodesMap_.find(edgeId);
         if ( iterFindMap != parentEdgeNodesMap_.end() ) {
           foundNode = iterFindMap->second;
         }
@@ -658,49 +647,9 @@ SuperElement::create_elements()
       }
             
       // third, nodes in the center of the element faces
-      const int numFaces = thisBucketsTopo.num_faces();
-      for ( int nf = 0; nf < numFaces; ++nf ) {
-        // although we are expecting quads or hexes (all nodes per face are the same) make this general for now
-        const int nodesPerFace = thisBucketsTopo.face_topology(nf).num_nodes();
-        std::vector<int> faceNodeOrdinals(nodesPerFace);
-        thisBucketsTopo.edge_node_ordinals(nf,&faceNodeOrdinals[0]);
-                
-        // vector to hold face nodes
-        stk::mesh::EntityIdVector faceCentroidVec;
-        for ( int ni = 0; ni < nodesPerFace; ++ni ) {
-          // extract local node id
-          const int thisNode = faceNodeOrdinals[ni];
-          // extract node
-          stk::mesh::Entity node = node_rels[thisNode];
-          faceCentroidVec[ni] = bulkData_->identifier(node);
-        }
-                
-        // sort the nodes and push back
-        std::sort(faceCentroidVec.begin(), faceCentroidVec.end());
-
-        // find the FACE centroid node(s)
-        iterFindMap = parentFaceNodesMap_.find(faceCentroidVec);
-        if ( iterFindMap != parentFaceNodesMap_.end() ) {
-          foundNode = iterFindMap->second;
-        }
-        else {
-          throw std::runtime_error("Could not find the node beloging to face vector");
-        }
-        connectedNodesIdVec.push_back(bulkData_->identifier(foundNode));
-      }
       
-      // last, nodes in the center of the element
-      stk::mesh::EntityIdVector volumeCentroidVec(numNodes);
-      for ( int ni = 0; ni < numNodes; ++ni ) {
-        stk::mesh::Entity node = node_rels[ni];
-        volumeCentroidVec[ni] = bulkData_->identifier(node);
-      }
-        
-      // sort the nodes
-      std::sort(volumeCentroidVec.begin(), volumeCentroidVec.end());
-      
-      // find the element centroid node(s)
-      iterFindMap = parentElemNodesMap_.find(volumeCentroidVec);
+      // last, nodes in the center of the element; find the element centroid node(s)
+      iterFindMap = parentElemNodesMap_.find(elemId);
       if ( iterFindMap != parentElemNodesMap_.end() ) {
         foundNode = iterFindMap->second;
       }
@@ -708,20 +657,20 @@ SuperElement::create_elements()
         throw std::runtime_error("Could not find the node beloging to element vector");
       }
       connectedNodesIdVec.push_back(bulkData_->identifier(foundNode));
-
+      
       // all done with element, edge and face node connectivitoes; create the element
       stk::mesh::Entity theElem
         = stk::mesh::declare_element(*bulkData_, *superElementPart_,
-                                      availableElemIds[availableElemIdCounter],
-                                       connectedNodesIdVec);
+                                     availableElemIds[availableElemIdCounter],
+                                     connectedNodesIdVec);
       
       // push back to map
-      superElementElemMap_[volumeCentroidVec] = theElem;
+      superElementElemMap_[elemId] = theElem;
       
       availableElemIdCounter++;
     }
   }
-
+  
   bulkData_->modification_end();
 }
 
@@ -731,6 +680,7 @@ SuperElement::create_elements()
 void
 SuperElement::create_elements_surface()
 {
+  /* WIP
   // find total number of locally owned elements
   size_t numNewSurfaceElem = 0;
   
@@ -769,12 +719,10 @@ SuperElement::create_elements_surface()
     const stk::mesh::Bucket::size_type length   = b.size();
     
     // extract buckets face and element topology; not sure if we need this yet
-    /*
-        stk::topology thisBucketsTopo = b.topology();
-        b.parent_topology(stk::topology::ELEMENT_RANK, parentTopo);
-        ThrowAssert ( parentTopo.size() == 1 );
-        stk::topology theElemTopo = parentTopo[0];
-      */
+    stk::topology thisBucketsTopo = b.topology();
+    b.parent_topology(stk::topology::ELEMENT_RANK, parentTopo);
+    ThrowAssert ( parentTopo.size() == 1 );
+    stk::topology theElemTopo = parentTopo[0];
     
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       
@@ -818,6 +766,8 @@ SuperElement::create_elements_surface()
   }
   
   bulkData_->modification_end();
+
+*/
 }
   
 //--------------------------------------------------------------------------
@@ -870,18 +820,21 @@ void
 SuperElement::initialize_fields()
 {
   // just check on whether or not the nodes are all here on the superElementPart_; define gold standard for three element quad4 mesh
-  int goldElemNodalOrder[27] = {1, 2, 4, 8, 12, 13, 9, 16, 19,
-                                8, 4, 5, 7, 9, 14, 10, 17, 21,
-                                7, 5, 3, 6, 10, 15, 11, 18, 20};
+  const stk::mesh::EntityId goldElemNodalOrder[27] = {1, 2, 4, 8, 12, 13, 9, 16, 19,
+                                                      8, 4, 5, 7, 9, 14, 10, 17, 20,
+                                                      7, 5, 3, 6, 10, 15, 11, 18, 21};
+  const stk::mesh::EntityId goldElemId[3] = {4,5,6};
+  int goldElemIdCount = 0;
   int goldElemNodalOrderCount = 0;
+  bool testElemIdPassed = true;
   bool testElemPassed = true;
 
-  // define some common selectors
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+  // define element selector
+  stk::mesh::Selector s_elem = metaData_->locally_owned_part()
     & stk::mesh::Selector(*superElementPart_);
 
   stk::mesh::BucketVector const& elem_buckets =
-    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_locally_owned_union );
+    bulkData_->get_buckets(stk::topology::ELEMENT_RANK, s_elem );
   for ( stk::mesh::BucketVector::const_iterator ib = elem_buckets.begin();
         ib != elem_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
@@ -891,6 +844,18 @@ SuperElement::initialize_fields()
       
       // get elem
       stk::mesh::Entity elem = b[k];
+      const stk::mesh::EntityId elemId = bulkData_->identifier(elem);
+  
+      if ( elemId != goldElemId[goldElemIdCount] ) {
+        testElemIdPassed = false;
+        if ( verboseOutput_ )
+          NaluEnv::self().naluOutputP0() << " elem id......FAILED " << elemId << " " << goldElemId[goldElemIdCount] << std::endl;
+      }
+      else {
+        if ( verboseOutput_ )
+          NaluEnv::self().naluOutputP0() << " elem id......PASSED " << elemId << " " << goldElemId[goldElemIdCount] << std::endl;
+      }
+      goldElemIdCount++;
 
       // number of nodes
       int num_nodes = b.num_nodes(k);
@@ -930,15 +895,17 @@ SuperElement::initialize_fields()
       }
     }
   }
-  NaluEnv::self().naluOutputP0() << std::endl;
-  NaluEnv::self().naluOutputP0() << "SuperElement Quad4 Unit Tests" << std::endl;
-  NaluEnv::self().naluOutputP0() << "-----------------------------" << std::endl;
+
+  if ( testElemIdPassed )
+    NaluEnv::self().naluOutputP0() << "Element Ids Test            PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Element Ids Test            FAILED" << std::endl;
+
   if ( testElemPassed )
     NaluEnv::self().naluOutputP0() << "Element Connectivities Test PASSED" << std::endl;
   else
     NaluEnv::self().naluOutputP0() << "Element Connectivities Test FAILED" << std::endl;
-  
-  
+    
   // now check nodes in the mesh based on super element part (same selector as above)
   size_t totalNumNodes = 0;
   size_t goldTotalNumNodes = 21;
@@ -948,8 +915,12 @@ SuperElement::initialize_fields()
   int goldNodalOrderCount = 0;
   bool testNodalPassed = true;
   
+  // define node selector
+  stk::mesh::Selector s_node = metaData_->locally_owned_part()
+    & stk::mesh::Selector(*superElementPart_);
+
   stk::mesh::BucketVector const& node_buckets =
-  bulkData_->get_buckets(stk::topology::NODE_RANK, s_locally_owned_union );
+  bulkData_->get_buckets(stk::topology::NODE_RANK, s_node );
   for ( stk::mesh::BucketVector::const_iterator ib = node_buckets.begin();
        ib != node_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
@@ -983,9 +954,9 @@ SuperElement::initialize_fields()
     testNodalPassed = false;
   
   if ( testNodalPassed )
-    NaluEnv::self().naluOutputP0() << "Nodal iteration Test PASSED" << std::endl;
-  else
-    NaluEnv::self().naluOutputP0() << "Nodal iteration Test FAILED" << std::endl;
+    NaluEnv::self().naluOutputP0() << "Nodal iteration Test        PASSED" << std::endl;
+  else 
+    NaluEnv::self().naluOutputP0() << "Nodal iteration Test        FAILED" << std::endl;
   NaluEnv::self().naluOutputP0() << std::endl;
 }
 

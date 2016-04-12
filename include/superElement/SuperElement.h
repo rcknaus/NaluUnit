@@ -44,6 +44,13 @@ namespace stk {
 namespace sierra {
 namespace naluUnit {
 
+struct EdgeNodeSharing {
+public:
+  stk::mesh::EntityId edgeId_;
+  stk::mesh::EntityId globalNodeId_;
+  int localNodeId_;
+};
+
 class SuperElement
 {
 public:
@@ -62,10 +69,10 @@ public:
   void declare_edge_part();
   void declare_face_part();
 
-  // create all of the ids
-  void create_parent_edge_ids();
-  void create_parent_face_ids();
-  void create_parent_element_ids();
+  // find size of each entity on the mesh 
+  void size_of_edges();
+  void size_of_faces();
+  void size_of_elements();
 
   void create_nodes();
 
@@ -74,8 +81,11 @@ public:
   void create_elements();
   void create_elements_surface();
 
-  void create_edges_and_faces();
-  void delete_edges_and_faces();
+  // create and destroy faces off of original part
+  void create_edges();
+  void create_faces();
+  void delete_edges();
+  void delete_faces();
   
   // register nodal and elemental fields
   void register_fields();
@@ -145,25 +155,27 @@ public:
   stk::mesh::Part *edgePart_;
   stk::mesh::Part *facePart_;
 
+  // entity count to define node count
+  size_t numberOfEdges_;
+  size_t numberOfFaces_;
+  size_t numberOfElements_;
+
   // vector of new nodes
   std::vector<stk::mesh::Entity> promotedNodesVec_;
 
-  // hold the unique vector of nodes for each element
-  std::vector<stk::mesh::EntityIdVector> parentElemIds_;
-  
-  // hold the unique vector of nodes for each edge
-  std::vector<stk::mesh::EntityIdVector> parentEdgeIds_;
-  
-  // hold the unique vector of nodes for each face
-  std::vector<stk::mesh::EntityIdVector> parentFaceIds_;
-  
   // create mapping of parent ids nodes to the new node
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentElemNodesMap_;
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentEdgeNodesMap_;
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > parentFaceNodesMap_;
+  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentEdgeNodesMap_;
+  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentFaceNodesMap_;
+  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentElemNodesMap_;
   
-  // mapping of parent element ids to new higher order element
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity > superElementElemMap_;
+  // mapping of low order element id to the new higher order element
+  std::map<stk::mesh::EntityId, stk::mesh::Entity > superElementElemMap_;
+
+  // keep something that holds the set of edges and who besides local rank holds them
+  std::vector<std::vector<int> > sharedProcsEdge_;
+
+  // communication patter for edge-nodes
+  std::vector<EdgeNodeSharing> edgeNodeSharingVec_;
 };
 
 } // namespace naluUnit
