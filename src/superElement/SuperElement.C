@@ -329,10 +329,12 @@ SuperElement::delete_edges()
 
     // good to destroy
     if (bulkData_->is_valid(edges[ii]) && bulkData_->bucket(edges[ii]).owned()) {
-      bulkData_->destroy_entity( edges[ii] );   
+      const bool successfullyDestroyed = bulkData_->destroy_entity( edges[ii] );   
+      if ( !successfullyDestroyed )
+        throw std::runtime_error("destroy did not happen");
     }
     else {
-      throw std::runtime_error("not good to destroy");
+      throw std::runtime_error("check on locally owned for deletion");
     }
   }  
   bulkData_->modification_end();
