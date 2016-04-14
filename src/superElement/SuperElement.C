@@ -287,33 +287,96 @@ SuperElement::create_edges()
 void
 SuperElement::delete_edges()
 {
-  // complex delettion...
+  // extract selected edges; avoid bucket loop since it gets out of date
+  stk::mesh::BucketVector const& edge_buckets = bulkData_->get_buckets( stk::topology::EDGE_RANK,  *edgePart_);
+  std::vector<stk::mesh::Entity> edges;
+  stk::mesh::get_selected_entities( *edgePart_ , edge_buckets, edges);
 
-  // check to see how many edges remain in the original part now...
-  size_t numberOfRemainingEdges = 0;
-  // selector based on locally owned and shared edges
-  stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_);
+  // delete upward relations
+  bulkData_->modification_begin();
+  for (unsigned ii=0; ii < edges.size(); ++ii) {
+
+    if (!bulkData_->is_valid(edges[ii]))
+      throw std::runtime_error("bad edge 1");
+
+    // upward edge->element
+    unsigned num_elems = bulkData_->num_elements(edges[ii]);
+    if ( num_elems > 0 ) {
+      stk::mesh::Entity const * const edge_elems = bulkData_->begin_elements(edges[ii]);
+      stk::mesh::ConnectivityOrdinal const* edge_elem_ordinals = bulkData_->begin_element_ordinals(edges[ii]);
+      for ( unsigned k = 0; k < num_elems; ++k ) {
+        stk::mesh::Entity to_rel = edge_elems[k];
+        stk::mesh::RelationIdentifier to_id = edge_elem_ordinals[k];
+        bool del = bulkData_->destroy_relation( to_rel, edges[ii], to_id);
+        if (!del)
+          throw std::runtime_error("delete_edges failed to delete up relation (element)");
+      }
+    }
+    
+    // upward edge->face
+    unsigned num_faces = bulkData_->num_faces(edges[ii]);
+    if ( num_faces > 0 ) {
+      stk::mesh::Entity const * const edge_faces = bulkData_->begin_faces(edges[ii]);
+      stk::mesh::ConnectivityOrdinal const* edge_face_ordinals = bulkData_->begin_face_ordinals(edges[ii]);
+      for ( unsigned k = 0; k < num_faces; ++k ) {
+        stk::mesh::Entity to_rel = edge_faces[k];
+        stk::mesh::RelationIdentifier to_id = edge_face_ordinals[k];
+        bool del = bulkData_->destroy_relation( to_rel, edges[ii], to_id);
+        if (!del)
+          throw std::runtime_error("delete_edges failed to delete up relation (face)");
+      }
+    }
+
+    // good to destroy
+    if (bulkData_->is_valid(edges[ii]) && bulkData_->bucket(edges[ii]).owned()) {
+      bulkData_->destroy_entity( edges[ii] );   
+    }
+    else {
+      throw std::runtime_error("not good to destroy");
+    }
+  }  
+  bulkData_->modification_end();
   
-  stk::mesh::BucketVector const& edge_remaining_buckets =
-    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge );
-  for ( stk::mesh::BucketVector::const_iterator ib = edge_remaining_buckets.begin();
-        ib != edge_remaining_buckets.end() ; ++ib ) {
+  // check now...
+  size_t numberOfEdgesInOriginalPart = 0;
+  stk::mesh::Selector s_edge_orig_part = stk::mesh::Selector(*originalPart_);  
+  stk::mesh::BucketVector const& edge_buckets_orig_part =
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge_orig_part );
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets_orig_part.begin();
+        ib != edge_buckets_orig_part.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();    
     // increment size
-    numberOfRemainingEdges += length; 
+    numberOfEdgesInOriginalPart += length; 
+  }
+
+  // second, check the size of edges on the edge part
+  size_t numberOfEdgesInEdgePart = 0;
+  stk::mesh::Selector s_edge_edge_part = stk::mesh::Selector(*edgePart_);
+  stk::mesh::BucketVector const& edge_buckets_edge_part =
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge_edge_part );
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets_edge_part.begin();
+        ib != edge_buckets_edge_part.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();    
+    // increment size
+    numberOfEdgesInEdgePart += length; 
   }
   
-  // HACK... there should be two removed from the edge part; ten should live in the original part
-  const bool testEdgeCount = numberOfRemainingEdges == 10 ? true : false;
-  
-  if (verboseOutput_ )
-    NaluEnv::self().naluOutputP0() << "remaining edges: " << numberOfRemainingEdges << std::endl;
-  
-  if ( testEdgeCount )
-    NaluEnv::self().naluOutputP0() << "Remaining Edge Count Test   PASSED" << std::endl;
+  // there should be two removed from the edge part (zero left); 
+  // there should be eight remaining in the original part
+  const bool testEdgesInOrigPart = numberOfEdgesInOriginalPart == 8 ? true : false;
+  const bool testEdgesInEdgePart = numberOfEdgesInEdgePart == 0 ? true : false;
+    
+  if ( testEdgesInOrigPart )
+    NaluEnv::self().naluOutputP0() << "Remaining Edges(OP) Test    PASSED" << std::endl;
   else
-    NaluEnv::self().naluOutputP0() << "Remaining Edge Count Test   FAILED" << std::endl;
+    NaluEnv::self().naluOutputP0() << "Remaining Edges(OP) Test    FAILED" << std::endl;
+  
+  if ( testEdgesInEdgePart )
+    NaluEnv::self().naluOutputP0() << "Remaining Edges(EP) Test    PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Remaining Edges(EP) Test    FAILED" << std::endl;
 }
 
 //--------------------------------------------------------------------------
