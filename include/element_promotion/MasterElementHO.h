@@ -41,6 +41,9 @@ public:
   std::vector<double> ipWeight_;
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
+  std::vector<double> geometricShapeDerivs_;
+  double* p_geometricShapeDerivs_;
+  int geometricNodesPerElement_;
 
 private:
   void set_interior_info();
@@ -101,6 +104,9 @@ public:
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
   std::vector<double> expFaceShapeDerivs_;
+  std::vector<double> geometricShapeDerivs_;
+  double* p_geometricShapeDerivs_;
+  int geometricNodesPerElement_;
 
 private:
   void set_interior_info();
@@ -185,10 +191,16 @@ public:
     double *volume,
     double * error ) final;
 
+  const std::vector<double>& shape_functions() { return shapeFunctions_; };
+  const std::vector<double>& shape_derivs() { return shapeDerivs_; };
+
   const ElementDescription& elem_;
   std::vector<double> ipWeight_;
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
+  std::vector<double> geometricShapeDerivs_;
+  double* p_geometricShapeDerivs_;
+  int geometricNodesPerElement_;
 private:
   void set_interior_info();
 
@@ -242,8 +254,13 @@ public:
   int opposingFace(
     const int ordinal, const int node) final;
 
+  const ElementDescription& elem_;
+  std::vector<double> ipWeight_;
   std::vector<double> shapeFunctions_;
-
+  std::vector<double> shapeDerivs_;
+  std::vector<double> geometricShapeDerivs_;
+  double* p_geometricShapeDerivs_;
+  int geometricNodesPerElement_;
 private:
   void set_interior_info();
   void set_boundary_info();
@@ -260,12 +277,8 @@ private:
     double* grad,
     double* det_j) const;
 
-
-  const ElementDescription& elem_;
   std::vector<ContourData> ipInfo_;
   int ipsPerFace_;
-
-  std::vector<double> shapeDerivs_;
   std::vector<double> expFaceShapeDerivs_;
 };
 

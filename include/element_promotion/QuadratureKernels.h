@@ -39,7 +39,6 @@ namespace naluUnit {
     double* p_weightTensor_;
     double* p_weightMatrix_;
     double* p_work2D_;
-
   };
 
 } // namespace naluUnit

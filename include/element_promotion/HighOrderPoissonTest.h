@@ -4,11 +4,15 @@
 /*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#ifndef PromoteElementRestartTest_h
-#define PromoteElementRestartTest_h
+#ifndef HighOrderPoissonTest_h
+#define HighOrderPoissonTest_h
 
 #include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
+
+#include <Teuchos_SerialDenseVector.hpp>
+#include <Teuchos_SerialDenseMatrix.hpp>
+#include <Teuchos_SerialDenseSolver.hpp>
 
 #include <stddef.h>
 #include <memory>
@@ -20,6 +24,7 @@ namespace sierra {
 namespace naluUnit {
   class MasterElement;
   class PromoteElement;
+  class PromotedElementIO;
   struct ElementDescription;
 }
 }
@@ -46,71 +51,84 @@ namespace stk {
 
 namespace sierra {
 namespace naluUnit {
-class MasterElement;
-class PromotedElementIO;
-class PromotedElement;
-}  // namespace naluUnit
-}  // namespace sierra
 
-namespace sierra {
-namespace naluUnit {
-
-
-class PromoteElementRestartTest
+class HighOrderPoissonTest
 {
 public:
   // constructor/destructor
-  PromoteElementRestartTest(std::string restartFileName, std::string outputFileName);
-  ~PromoteElementRestartTest();
+  HighOrderPoissonTest(std::string meshName = "test_meshes/hex8_2.g");
+  ~HighOrderPoissonTest();
 
   void execute();
 
-  void read_restart_mesh();
+  void setup_mesh();
+
   void register_fields();
-  void output_banner();
-  void read_input_fields();
+
   void set_output_fields();
+
   void output_results();
 
-  bool check_projected_nodal_gradient();
-  void compute_projected_nodal_gradient();
-  void compute_projected_nodal_gradient_interior(stk::mesh::Selector& selector);
-  void compute_projected_nodal_gradient_boundary(stk::mesh::Selector& selector);
+  void initialize_fields();
+
+  void output_banner();
+
+  void setup_super_parts();
+
+  void solve_poisson();
 
   std::unique_ptr<MasterElement>
-  create_master_subcontrol_surface_element(const ElementDescription& elem);
+  make_master_volume_element(const ElementDescription& elem);
 
   std::unique_ptr<MasterElement>
-  create_master_boundary_element(const ElementDescription& elem);
+  make_master_subcontrol_surface_element(const ElementDescription& elem);
 
-  unsigned determine_polynomial_order_from_meta_data(const stk::mesh::MetaData& meta) const;
-  void declare_super_face_parts(const ElementDescription& elem, stk::mesh::MetaData& meta);
+  std::unique_ptr<MasterElement>
+  make_master_boundary_element(const ElementDescription& elem);
 
+  bool check_solution();
 
-  const std::string restartFileName_;
-  const std::string outputFileName_;
-  size_t restartFileIndex_;
-  size_t resultsFileIndex_;
-  double defaultFloatingPointTolerance_;
-  unsigned nDim_;
+  const std::string meshName_;
+  const int order_;
+  const bool outputTiming_;
+  double timeCondense_;
+  double timeInteriorUpdate_;
+
+  std::string fineOutputName_;
+
+  std::unique_ptr<ElementDescription> elem_;
+  std::unique_ptr<PromotedElementIO> promoteIO_;
 
   // meta, bulk, io, and promote element
   std::unique_ptr<stk::mesh::MetaData> metaData_;
   std::unique_ptr<stk::mesh::BulkData> bulkData_;
   std::unique_ptr<stk::io::StkMeshIoBroker> ioBroker_;
 
-  // New element classes
-  std::unique_ptr<ElementDescription> elem_;
-  std::unique_ptr<MasterElement> meSCS_;
-  std::unique_ptr<MasterElement> meBC_;
-  std::unique_ptr<PromoteElement> promoteElement_;
-  std::unique_ptr<PromotedElementIO> promoteIO_;
-
-  //fields
+  // fields
   VectorFieldType* coordinates_;
-  ScalarFieldType* dualNodalVolume_;
   ScalarFieldType* q_;
-  VectorFieldType* dqdx_;
+  ScalarIntFieldType* mask_;
+  ScalarFieldType* qExact_;
+
+  // part vectors
+  stk::mesh::PartVector originalPartVector_;
+  stk::mesh::PartVector superPartVector_;
+  stk::mesh::PartVector superSidePartVector_;
+
+  Teuchos::SerialDenseMatrix<int,double> lhs_;
+  Teuchos::SerialDenseVector<int,double> rhs_;
+  Teuchos::SerialDenseVector<int,double> delta_;
+  std::map<stk::mesh::Entity, size_t> rowMap_;
+  std::unique_ptr<MasterElement> meSCS_;
+  std::unique_ptr<MasterElement> meSCV_;
+
+
+private:
+  void initialize_matrix();
+  void assemble_poisson();
+  void apply_dirichlet();
+  void solve_matrix_equation();
+  void update_field();
 };
 
 } // namespace naluUnit

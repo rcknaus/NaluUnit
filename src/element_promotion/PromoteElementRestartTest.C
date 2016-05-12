@@ -52,13 +52,16 @@ namespace naluUnit{
 // TODO(rcknaus): separate out the promote element tests so that they don't
 // to be copied here
 //==========================================================================
-PromoteElementRestartTest::PromoteElementRestartTest(std::string restartName, std::string outputFileName)
+PromoteElementRestartTest::PromoteElementRestartTest(
+  std::string restartName,
+  std::string outputFileName)
   :  restartFileName_(std::move(restartName)),
      outputFileName_(std::move(outputFileName)),
      restartFileIndex_(1),
      resultsFileIndex_(2),
      defaultFloatingPointTolerance_(1.0e-12)
 {
+
 }
 //--------------------------------------------------------------------------
 PromoteElementRestartTest::~PromoteElementRestartTest() = default;
@@ -67,53 +70,18 @@ void
 PromoteElementRestartTest::execute()
 {
   read_restart_mesh();
+  output_banner();
 
-  auto meshParts = metaData_->get_mesh_parts();
-  baseElemParts_ = base_elem_parts(meshParts);
-  superElemParts_ = only_super_elem_parts(meshParts);
-
-  //Require (for now) that all base element parts were promoted
-  ThrowRequire(super_elem_part_vector(baseElemParts_) == superElemParts_
-            && !superElemParts_.empty());
-
-  const unsigned numNodes = superElemParts_.at(0)->topology().num_nodes();
-  unsigned polyOrder = (metaData_->spatial_dimension() == 2) ?
-      std::sqrt(static_cast<double>(numNodes+1))-1 : std::cbrt(static_cast<double>(numNodes+1))-1;
-  ThrowRequire(std::pow(polyOrder+1, metaData_->spatial_dimension()) == numNodes);
-
-  std::string elemName;
-  if(metaData_->spatial_dimension() == 2) {
-    unsigned nodes = (polyOrder+1)*(polyOrder+1);
-    elemName = "Quad" + std::to_string(nodes);
-  }
-  else {
-    unsigned nodes = (polyOrder+1)*(polyOrder+1)*(polyOrder+1);
-    elemName = "Hex" + std::to_string(nodes);
-  }
-
-  NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
-  NaluEnv::self().naluOutputP0() << "Restarting with a '" << elemName
-                                 << "' Element"
-                                 <<   std::endl;
-  NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
-
-  elem_ = ElementDescription::create(metaData_->spatial_dimension(), polyOrder);
-  meSCS_ = create_master_subcontrol_surface_element(*elem_);
-  meBC_  = create_master_boundary_element(*elem_);
-
-  promoteElement_ = make_unique<PromoteElement>(*elem_);
-
-  promoteElement_->populate_boundary_connectivity_map_using_super_elems(
-    *bulkData_,
-    meshParts
-  );
+  // All parts were promoted
+  bulkData_->modification_begin();
+  PromoteElement(*elem_).create_boundary_face_elements(*bulkData_, metaData_->get_mesh_parts());
+  bulkData_->modification_end();
 
   read_input_fields();
   set_output_fields();
-
   compute_projected_nodal_gradient();
-
   output_results();
+
 }
 //--------------------------------------------------------------------------
 void
@@ -132,12 +100,93 @@ PromoteElementRestartTest::read_restart_mesh()
   ioBroker_->create_input_mesh();
   nDim_ = metaData_->spatial_dimension();
 
+  // Need to determine the polynomial order now in order to declare
+  // the proper face topology before metadata is committed
+  auto polyOrder = determine_polynomial_order_from_meta_data(*metaData_);
+
+  elem_ = ElementDescription::create(metaData_->spatial_dimension(), polyOrder);
+  meSCS_ = create_master_subcontrol_surface_element(*elem_);
+  meBC_  = create_master_boundary_element(*elem_);
+
+  declare_super_face_parts(*elem_, *metaData_);
+
   register_fields();
   ioBroker_->add_input_field({*dualNodalVolume_, dualNodalVolume_->name()});
-  ioBroker_->add_input_field({*sharedElems_, sharedElems_->name()});
   ioBroker_->add_input_field({*q_, q_->name()});
 
   ioBroker_->populate_bulk_data();
+}
+//--------------------------------------------------------------------------
+void create_element_methods()
+{
+
+}
+//--------------------------------------------------------------------------
+void
+PromoteElementRestartTest::output_banner()
+{
+  auto polyOrder = elem_->polyOrder;
+
+  std::string elemName;
+  if(metaData_->spatial_dimension() == 2) {
+    unsigned nodes = (polyOrder+1)*(polyOrder+1);
+    elemName = "Quad" + std::to_string(nodes);
+  }
+  else {
+    unsigned nodes = (polyOrder+1)*(polyOrder+1)*(polyOrder+1);
+    elemName = "Hex" + std::to_string(nodes);
+  }
+
+  NaluEnv::self().naluOutputP0() << "Restarting with a '" << elemName
+      << "' Element"
+      <<   std::endl;
+  NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
+}
+//--------------------------------------------------------------------------
+unsigned
+PromoteElementRestartTest::determine_polynomial_order_from_meta_data(const stk::mesh::MetaData& meta) const
+{
+  // Requires that all mesh parts were promoted
+
+  auto superElemParts = only_super_elem_parts(meta.get_mesh_parts());
+  ThrowRequire(part_vector_is_valid(superElemParts));
+
+  const unsigned numNodes = superElemParts.at(0)->topology().num_nodes();
+  unsigned polyOrder = (metaData_->spatial_dimension() == 2) ?
+      std::sqrt(static_cast<double>(numNodes+1))-1 : std::cbrt(static_cast<double>(numNodes+1))-1;
+
+  ThrowRequire(std::pow(polyOrder+1, meta.spatial_dimension()) == numNodes);
+
+  return polyOrder;
+}
+//--------------------------------------------------------------------------
+void
+PromoteElementRestartTest::declare_super_face_parts(
+  const ElementDescription& elem, stk::mesh::MetaData& meta)
+{
+  for (const auto* ipart : meta.get_mesh_parts()) {
+    if (!ipart->subsets().empty()) {
+      auto* superSuperset = &meta.declare_part(super_element_part_name(ipart->name()));
+      for (const auto* subset : ipart->subsets()) {
+        if (subset->topology().rank() == meta.side_rank()) {
+          stk::mesh::Part* superFacePart;
+          if (metaData_->spatial_dimension() == 2) {
+            superFacePart = &metaData_->declare_part_with_topology(
+              super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+              stk::create_superedge_topology(static_cast<unsigned>(elem_->nodesPerFace))
+            );
+          }
+          else {
+            superFacePart = &metaData_->declare_part_with_topology(
+                        super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+                        stk::create_superface_topology(static_cast<unsigned>(elem_->nodesPerFace))
+            );
+          }
+          meta.declare_part_subset(*superSuperset, *superFacePart);
+        }
+      }
+    }
+  }
 }
 //--------------------------------------------------------------------------
 void
@@ -145,14 +194,9 @@ PromoteElementRestartTest::register_fields()
 {
   // register fields on all mesh parts
   for (const auto* ipart : metaData_->get_mesh_parts()) {
-
     dualNodalVolume_ = &(metaData_->declare_field<ScalarFieldType>(
       stk::topology::NODE_RANK, "dual_nodal_volume"));
     stk::mesh::put_field(*dualNodalVolume_, *ipart);
-
-    sharedElems_ = &(metaData_->declare_field<ScalarIntFieldType>(
-      stk::topology::NODE_RANK, "elements_shared"));
-    stk::mesh::put_field(*sharedElems_, *ipart);
 
     coordinates_ = &(metaData_->declare_field<VectorFieldType>(
       stk::topology::NODE_RANK, "coordinates"));
@@ -167,6 +211,7 @@ PromoteElementRestartTest::register_fields()
      stk::mesh::put_field(*dqdx_,*ipart, nDim_);
   }
 }
+//--------------------------------------------------------------------------
 void
 PromoteElementRestartTest::read_input_fields()
 {
@@ -182,7 +227,7 @@ PromoteElementRestartTest::set_output_fields()
     *elem_,
     *metaData_,
     *bulkData_,
-    baseElemParts_,
+    base_elem_parts(metaData_->get_mesh_parts()),
     outputFileName_
   );
 
@@ -194,21 +239,19 @@ PromoteElementRestartTest::output_results()
 {
  promoteIO_->write_database_data(0.0);
  output_result("Restart PNG", check_projected_nodal_gradient());
+ NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
 }
 //--------------------------------------------------------------------------
 void
 PromoteElementRestartTest::compute_projected_nodal_gradient()
 {
-  auto interiorSelector = stk::mesh::selectUnion(superElemParts_)
+  auto selector = stk::mesh::selectUnion(only_super_parts(metaData_->get_mesh_parts()))
                 & metaData_->locally_owned_part();
 
-  auto boundarySelector = stk::mesh::selectUnion(metaData_->get_mesh_parts())
-                & metaData_->locally_owned_part();
+  stk::mesh::field_fill(0.0, *dqdx_, selector);
 
-  stk::mesh::field_fill(0.0,*dqdx_, interiorSelector);
-
-  compute_projected_nodal_gradient_interior(interiorSelector);
-  compute_projected_nodal_gradient_boundary(boundarySelector);
+  compute_projected_nodal_gradient_interior(selector);
+  compute_projected_nodal_gradient_boundary(selector);
 
   if (bulkData_->parallel_size() > 1) {
     stk::mesh::parallel_sum(*bulkData_, {dqdx_});
@@ -313,8 +356,7 @@ PromoteElementRestartTest::compute_projected_nodal_gradient_boundary(
     meBC_->shape_fcn(ws_shape_function.data());
 
     for (size_t k = 0; k < length; ++k) {
-      //TODO(rcknaus): still need to route around stk for boundary contributions
-      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
+      const auto* face_node_rels = b.begin_nodes(k);
 
       for (int ni = 0; ni < nodesPerFace; ++ni) {
         stk::mesh::Entity node = face_node_rels[ni];

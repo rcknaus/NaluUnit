@@ -35,6 +35,7 @@ namespace naluUnit {
 
     double err = -1.0;
     for (unsigned j = 0; j < approx.size(); ++j) {
+      if (std::isnan(approx[j])) return std::numeric_limits<double>::max();
       err = std::max(err, std::abs(approx[j]-exact[j]));
     }
     return err;

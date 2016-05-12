@@ -96,7 +96,7 @@ set(nalu_unit_ex_name "naluUnitX")
 message("CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 if (CMAKE_BUILD_TYPE STREQUAL "DEBUG")
    set (nalu_unit_ex_name "naluUnitXd")
-   add_definitions("-Wall" "-Werror")
+   add_definitions("-Wall -Werror")
    message("Debug Build")
 endif()
 

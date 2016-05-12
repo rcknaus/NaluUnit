@@ -241,10 +241,7 @@ PromoteElementTest::compute_dual_nodal_volume()
 void
 PromoteElementTest::compute_projected_nodal_gradient()
 {
-  auto interiorSelector = stk::mesh::selectUnion(superElemPartVector_)
-                & metaData_->locally_owned_part();
-
-  auto boundarySelector = stk::mesh::selectUnion(originalPartVector_)
+  auto selector = stk::mesh::selectUnion(superElemPartVector_)
                 & metaData_->locally_owned_part();
 
   unsigned numRuns = 1;
@@ -256,16 +253,16 @@ PromoteElementTest::compute_projected_nodal_gradient()
 
     if (quadType_ == "SGL") {
       auto timeA = MPI_Wtime();
-      compute_projected_nodal_gradient_interior_SGL(interiorSelector);
-      compute_projected_nodal_gradient_boundary_SGL(boundarySelector);
+      compute_projected_nodal_gradient_interior_SGL(selector);
+      compute_projected_nodal_gradient_boundary_SGL(selector);
       auto timeB = MPI_Wtime();
 
       totalTime += (timeB - timeA);
     }
     else {
       auto timeA = MPI_Wtime();
-      compute_projected_nodal_gradient_interior(interiorSelector);
-      compute_projected_nodal_gradient_boundary(boundarySelector);
+      compute_projected_nodal_gradient_interior(selector);
+      compute_projected_nodal_gradient_boundary(selector);
       auto timeB = MPI_Wtime();
 
       totalTime += (timeB - timeA);
@@ -315,8 +312,7 @@ PromoteElementTest::check_node_count(unsigned polyOrder, unsigned originalNodeCo
     return false;
   }
 
-  auto addedNodes = count_nodes(stk::mesh::selectUnion(promotedPartVector_));
-  return addedNodes == totalNodes-originalNodeCount;
+  return totalNodes == allNodes;
 }
 //--------------------------------------------------------------------------
 size_t
@@ -370,8 +366,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior(
           for (unsigned j = 0; j < nDim_; ++j) {
             ws_coordinates[offSet + j] = coords[j];
           }
-          *stk::mesh::field_data(*sharedElems_, node) =
-              promoteElement_->num_elems(node);
+          *stk::mesh::field_data(*sharedElems_, node) = promoteElement_->num_elements(node);
         }
 
         // compute integration point volume
@@ -443,7 +438,7 @@ PromoteElementTest::compute_dual_nodal_volume_interior_SGL(
           for ( unsigned j = 0; j < nDim_; ++j ) {
             ws_coordinates[offSet+j] = coords[j];
           }
-          *stk::mesh::field_data(*sharedElems_, node) = promoteElement_->num_elems(node);
+          *stk::mesh::field_data(*sharedElems_, node) = promoteElement_->num_elements(node);
         }
 
         // compute integration point volume
@@ -589,8 +584,8 @@ PromoteElementTest::compute_projected_nodal_gradient_boundary(
     meBC_->shape_fcn(ws_shape_function.data());
 
     for (size_t k = 0; k < length; ++k) {
-      //TODO(rcknaus): still need to route around stk for boundary contributions
-      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
+      const auto* face_node_rels = b.begin_nodes(k);
+      ThrowRequireMsg(bulkData_->num_elements(b[k]) == 1, "Incorrect number of attached elements");
 
       for (int ni = 0; ni < nodesPerFace; ++ni) {
         stk::mesh::Entity node = face_node_rels[ni];
@@ -785,8 +780,9 @@ PromoteElementTest::compute_projected_nodal_gradient_boundary_SGL(
     int nodesPerElement = meBC_->nodesPerElement_;
 
     for (size_t k = 0; k < length; ++k) {
-      //TODO(rcknaus): still need to route around stk for boundary contributions
-      const auto* face_node_rels = promoteElement_->begin_side_nodes_all(b, k);
+      const auto* face_node_rels = b.begin_nodes(k);
+      ThrowRequireMsg(bulkData_->num_elements(b[k]) == 1, "Incorrect number of attached elements");
+
 
       for (int ni = 0; ni < nodesPerFace; ++ni) {
         stk::mesh::Entity node = face_node_rels[ni];
@@ -1028,9 +1024,10 @@ PromoteElementTest::check_dual_nodal_volume_quad()
       stk::mesh::Entity const* node_rels = b.begin_nodes(k);
       for (unsigned j = 0; j < b.num_nodes(k); ++j) {
         const double dualNodalVolume = *stk::mesh::field_data(*dualNodalVolume_,node_rels[j]);
-        const auto num_elems = *stk::mesh::field_data(*sharedElems_, node_rels[j]);
+        const auto num_elems = *stk::mesh::field_data(*sharedElems_,node_rels[j]);
         double exact = num_elems*exactDualNodalVolume[j];
         if (!is_near(dualNodalVolume,exact, defaultFloatingPointTolerance_)) {
+          NaluEnv::self().naluOutputP0() << "DNV test failed with error" << std::abs(dualNodalVolume-exact) << std::endl;
           return false;
         }
         testPassed = true;
@@ -1071,7 +1068,7 @@ PromoteElementTest::check_dual_nodal_volume_hex()
         stk::mesh::Entity const* node_rels = b.begin_nodes(k);
         for (unsigned j = 0; j < b.num_nodes(k); ++j) {
           const double dualNodalVolume = *stk::mesh::field_data(*dualNodalVolume_,node_rels[j]);
-          const auto num_elems = *stk::mesh::field_data(*sharedElems_, node_rels[j]);
+          const auto num_elems = *stk::mesh::field_data(*sharedElems_,node_rels[j]);
           double exact = num_elems*exactDualNodalVolume[j];
           if (!is_near(dualNodalVolume,exact, defaultFloatingPointTolerance_)) {
             return false;
@@ -1097,49 +1094,49 @@ PromoteElementTest::register_fields()
 
   // save space for parts of the input mesh
   for (auto& baseName : targetNames) {
-    std::string promotedName = promote_part_name(baseName);
-
     stk::mesh::Part* targetPart = metaData_->get_part(baseName);
 
     stk::mesh::Part* superElemPart = nullptr;
     if (targetPart->topology().rank() == stk::topology::ELEM_RANK) {
-      /* TODO(rcknaus): use this style after stk bug fix is pushed to Trilinos
-       *
-       *  superElemPart = &metaData_->declare_part_with_topology(
-       *       super_element_part_name(targetName),
-       *       stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
-       *  );
-       */
-
-
-      superElemPart = &metaData_->declare_part(
-        super_element_part_name(baseName),
-        stk::topology::ELEMENT_RANK
+      superElemPart = &metaData_->declare_part_with_topology(
+             super_element_part_name(baseName),
+             stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
       );
-
-      stk::mesh::set_topology(
-        *superElemPart,
-        stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
-      );
-
 
       stk::io::put_io_part_attribute(*superElemPart);
-
       superElemPartVector_.push_back(superElemPart);
     }
-
-    stk::mesh::Part* promotedPart = &metaData_->declare_part(promotedName, stk::topology::NODE_RANK);
-
-
+    else if (!targetPart->subsets().empty()) {
+      auto* superSuperset = &metaData_->declare_part(super_element_part_name(baseName));
+      for (const auto* subset : targetPart->subsets()) {
+        if (subset->topology().rank() == metaData_->side_rank()) {
+          stk::mesh::Part* superFacePart;
+          if (metaData_->spatial_dimension() == 2) {
+            superFacePart = &metaData_->declare_part_with_topology(
+              super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+              stk::create_superedge_topology(static_cast<unsigned>(elem_->nodesPerFace))
+            );
+          }
+          else {
+            superFacePart = &metaData_->declare_part_with_topology(
+                        super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+                        stk::create_superface_topology(static_cast<unsigned>(elem_->nodesPerFace))
+            );
+          }
+          //FIXME(rcknaus): ioss doesn't recognize superfaces
+          // stk::io::put_io_part_attribute(*superFacePart);
+          superElemPartVector_.push_back(superFacePart);
+          metaData_->declare_part_subset(*superSuperset, *superFacePart);
+        }
+      }
+    }
     // extract the parts
     originalPartVector_.push_back(targetPart);
-    promotedPartVector_.push_back(promotedPart);
 
     // register nodal fields
     dualNodalVolume_ = &(metaData_->declare_field<ScalarFieldType>(
       stk::topology::NODE_RANK, "dual_nodal_volume"));
     stk::mesh::put_field(*dualNodalVolume_, *targetPart);
-    stk::mesh::put_field(*dualNodalVolume_, *promotedPart);
     if (superElemPart != nullptr) {
       stk::mesh::put_field(*dualNodalVolume_, *superElemPart);
     }
@@ -1147,7 +1144,6 @@ PromoteElementTest::register_fields()
     coordinates_ = &(metaData_->declare_field<VectorFieldType>(
       stk::topology::NODE_RANK, "coordinates"));
     stk::mesh::put_field(*coordinates_,*targetPart, nDim_);
-    stk::mesh::put_field(*coordinates_,*promotedPart, nDim_);
     if (superElemPart != nullptr) {
       stk::mesh::put_field(*coordinates_,*superElemPart, nDim_);
     }
@@ -1155,7 +1151,6 @@ PromoteElementTest::register_fields()
     dqdx_ = &(metaData_->declare_field<VectorFieldType>(
        stk::topology::NODE_RANK, "dqdx"));
      stk::mesh::put_field(*dqdx_,*targetPart, nDim_);
-     stk::mesh::put_field(*dqdx_,*promotedPart, nDim_);
      if (superElemPart != nullptr) {
        stk::mesh::put_field(*dqdx_, *superElemPart, nDim_);
      }
@@ -1164,7 +1159,6 @@ PromoteElementTest::register_fields()
     sharedElems_ = &(metaData_->declare_field<ScalarIntFieldType>(
       stk::topology::NODE_RANK, "elements_shared"));
     stk::mesh::put_field(*sharedElems_, *targetPart);
-    stk::mesh::put_field(*sharedElems_, *promotedPart);
     if (superElemPart != nullptr) {
       stk::mesh::put_field(*sharedElems_, *superElemPart);
     }
@@ -1172,9 +1166,17 @@ PromoteElementTest::register_fields()
     q_ = &(metaData_->
         declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
     stk::mesh::put_field(*q_, *targetPart);
-    stk::mesh::put_field(*q_, *promotedPart);
     if (superElemPart != nullptr) {
       stk::mesh::put_field(*q_, *superElemPart);
+    }
+
+    tensorField_
+             = &(metaData_->declare_field< stk::mesh::Field<double,
+                 stk::mesh::SimpleArrayTag> >(stk::topology::NODE_RANK, "symm_tensor"));
+    int numComponents = nDim_ == 3 ? 6 : 3;
+    stk::mesh::put_field(*tensorField_, *targetPart, numComponents);
+    if (superElemPart != nullptr) {
+      stk::mesh::put_field(*tensorField_, *superElemPart, numComponents);
     }
    }
 }
@@ -1203,12 +1205,15 @@ PromoteElementTest::set_output_fields()
   );
 
   promoteIO_->add_fields({dualNodalVolume_, sharedElems_,q_,dqdx_});
+  //FIXME(rcknaus): Tensor outut is broken
+  //ThrowRequireMsg(promoteIO_->has_field(tensorField_->name()), "Field failed to be added.");
 }
 //--------------------------------------------------------------------------
 void
 PromoteElementTest::initialize_fields()
 {
   const double pi = std::acos(-1.0);
+  unsigned numComponents = nDim_ == 3 ? 6 : 3;
 
   stk::mesh::Selector s_all_entities = metaData_->universal_part();
   stk::mesh::BucketVector const& node_buckets =
@@ -1220,6 +1225,7 @@ PromoteElementTest::initialize_fields()
     double* q = stk::mesh::field_data(*q_, b);
     double* dqdx = stk::mesh::field_data(*dqdx_, b);
     double* coords = stk::mesh::field_data(*coordinates_, b);
+    double* tensorComps = stk::mesh::field_data(*tensorField_, b);
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       dualNodalVolume[k] = 0.0;
       if (linearScalarField_) {
@@ -1239,6 +1245,11 @@ PromoteElementTest::initialize_fields()
                  + std::cos(2.0*pi*coords[2+k*nDim_]) ) * 0.25;
         }
       }
+
+      for (unsigned j = 0; j < numComponents; ++j) {
+        tensorComps[j+k*numComponents] = j;
+      }
+
       for (unsigned j =0; j < nDim_; ++j) {
         dqdx[j+k*nDim_] = 0.0;
       }

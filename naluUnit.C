@@ -12,6 +12,7 @@
 #include <element_promotion/QuadratureRuleTest.h>
 #include <element_promotion/MasterElementHOTest.h>
 #include <element_promotion/PromoteElementRestartTest.h>
+#include <element_promotion/HighOrderPoissonTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -108,11 +109,13 @@ int main( int argc, char ** argv )
   const bool doPromotionQuadSGL = true;
   const bool doPromotionHexGaussLegendre = true;
   const bool doPromotionHexSGL = true;
+  const bool doQuadPoissonSGL = true;
+  const bool doHexPoissonSGL = true;
   const bool doRestartQuad = true;
   const bool doRestartHex = true;
 
-  const int maxQuadOrder = 7;
-  const int maxHexOrder = 7;
+  const int maxQuadOrder = 5;
+  const int maxHexOrder = 5;
 
   // The dual nodal volume test assumes a uniform mesh
   // The projected nodal gradient test should always work
@@ -163,6 +166,14 @@ int main( int argc, char ** argv )
     for (int j = 2; j <= maxHexOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "SGL").execute();
     }
+  }
+
+  if ( doQuadPoissonSGL  ) {
+    sierra::naluUnit::HighOrderPoissonTest("test_meshes/quad4_2.g").execute();
+  }
+
+  if (doHexPoissonSGL) {
+    sierra::naluUnit::HighOrderPoissonTest("test_meshes/hex8_2.g").execute();
   }
 
   if (doRestartQuad)  {

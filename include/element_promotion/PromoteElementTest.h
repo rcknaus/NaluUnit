@@ -7,6 +7,14 @@
 #ifndef PromoteElementTest_h
 #define PromoteElementTest_h
 
+#include <element_promotion/ElementDescription.h>
+#include <element_promotion/PromotedElementIO.h>
+
+#include <stk_mesh/base/Field.hpp>
+#include <stk_mesh/base/CoordinateSystems.hpp>
+#include <stk_mesh/base/MetaData.hpp>
+#include <stk_io/StkMeshIoBroker.hpp>
+#include <stk_mesh/base/BulkData.hpp>
 #include <stk_mesh/base/Field.hpp>
 #include <stk_mesh/base/CoordinateSystems.hpp>
 
@@ -31,12 +39,7 @@ typedef stk::mesh::Field<double, stk::mesh::SimpleArrayTag>  GenericFieldType;
 typedef stk::mesh::Field<double, stk::mesh::Cartesian>  VectorFieldType;
 
 namespace stk {
-  namespace io {
-    class StkMeshIoBroker;
-  }
   namespace mesh {
-    class BulkData;
-    class MetaData;
     class Part;
     class Selector;
 
@@ -165,9 +168,10 @@ public:
   // fields
   VectorFieldType* coordinates_;
   ScalarFieldType* dualNodalVolume_;
-  ScalarIntFieldType* sharedElems_;
   ScalarFieldType* q_;
+  ScalarIntFieldType* sharedElems_;
   VectorFieldType* dqdx_;
+  stk::mesh::Field<double, stk::mesh::SimpleArrayTag>* tensorField_;
 
   // part vectors
   stk::mesh::PartVector originalPartVector_;
