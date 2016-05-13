@@ -146,7 +146,7 @@ public:
 
   // part associated with super element
   stk::mesh::Part *superElementPart_;
-  stk::mesh::Part *superElementSurfacePart_;
+  stk::mesh::Part *superSurfacePart_;
 
   // in-transit part associated with augmented/promoted nodes
   stk::mesh::Part *promotedNodesPart_;
@@ -170,7 +170,7 @@ public:
   
   // mapping of low order element id to the new higher order element
   std::map<stk::mesh::EntityId, stk::mesh::Entity > superElementElemMap_;
-
+  
   // keep something that holds the set of edges and who besides local rank holds them
   std::vector<std::vector<int> > sharedProcsEdge_;
 

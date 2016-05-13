@@ -30,6 +30,9 @@
 // stk_io
 #include <stk_io/StkMeshIoBroker.hpp>
 
+// stk_topo
+#include <stk_topology/topology.hpp>
+
 // stk_util
 #include <stk_util/parallel/ParallelReduce.hpp>
 
@@ -71,7 +74,7 @@ SuperElement::SuperElement()
     originalPart_(NULL),
     originalSurfacePart_(NULL),
     superElementPart_(NULL),
-    superElementSurfacePart_(NULL),
+    superSurfacePart_(NULL),
     promotedNodesPart_(NULL),
     edgePart_(NULL),
     facePart_(NULL),
@@ -157,17 +160,7 @@ SuperElement::execute()
   
   // create the element
   create_elements();
-  const bool tryMe = false;
-  if ( tryMe ) {
-    create_elements_surface();
-  }
-  else {
-    if ( verboseOutput_ ) {
-      NaluEnv::self().naluOutputP0() << "..Unit Test Notes: " << std::endl;
-      NaluEnv::self().naluOutputP0() << "....Need to figure out how to provide the super element topo with # sides, faces, etc for surface creation"
-                                     << std::endl;
-    }
-  }
+  create_elements_surface();
   
   // delete the edges and faces
   delete_edges();
@@ -197,18 +190,9 @@ SuperElement::declare_super_part()
   // create the super topo; how to assign number of sides, faces, etc?
   stk::topology superElemTopo = stk::create_superelement_topology(nodesPerElem);
   
-  // two ways to create the part... WIP for doOld...
-  const bool doOld = false;
-  if ( doOld ) {
-    // declare part with superTopo
-    superElementPart_ = &metaData_->declare_part_with_topology(superElementPartName_, superElemTopo);
-  }
-  else {
-    // declare part with element rank
-    superElementPart_ = &metaData_->declare_part(superElementPartName_, stk::topology::ELEMENT_RANK);
-    stk::mesh::set_topology(*superElementPart_, superElemTopo);
-  }
- 
+  // create the part all at once
+  superElementPart_ = &metaData_->declare_part_with_topology(superElementPartName_, superElemTopo);
+  
   // we want this part to show up in the output mesh
   stk::io::put_io_part_attribute(*superElementPart_);
   
@@ -229,25 +213,19 @@ SuperElement::declare_super_part_surface()
   int nodesPerFace = pOrder_+1;
   if ( nDim_ > 2 )
     nodesPerFace *= (pOrder_+1);
-    
-  // create the super topo
-  stk::topology superElemSurfaceTopo = stk::create_superelement_topology(nodesPerFace);
+
+  // create the super topo; how to assign number of sides, faces, etc?
+  stk::topology superElemSurfaceTopo = (nDim_ > 2) 
+    ? stk::create_superface_topology(nodesPerFace) 
+    : stk::create_superedge_topology(nodesPerFace); 
   
-  // two ways to create the part... WIP for doOld...
-  const bool doOld = false;
-  if ( doOld ) {
-    // declare part with superTopo
-    superElementSurfacePart_ = &metaData_->declare_part_with_topology(superElementSurfacePartName_,   superElemSurfaceTopo);
-  }
-  else {
-    // declare part with element rank
-    superElementSurfacePart_ = &metaData_->declare_part(superElementSurfacePartName_,
-                                                        metaData_->side_rank());
-    stk::mesh::set_topology(*superElementSurfacePart_, superElemSurfaceTopo);
-  }
+  // declare part with superTopo
+  superSurfacePart_ = &metaData_->declare_part_with_topology(superElementSurfacePartName_,   superElemSurfaceTopo);
     
-  // we want this part to show up in the output mesh
-  stk::io::put_io_part_attribute(*superElementSurfacePart_);
+  // we want this part to show up in the output mesh... may not work as expected
+  const bool outputIt = false;
+  if ( outputIt )
+    stk::io::put_io_part_attribute(*superSurfacePart_);
     
   // save off lower order part
   originalSurfacePart_ = metaData_->get_part(originalSurfacePartName_);
@@ -583,7 +561,47 @@ SuperElement::create_nodes()
   }
 
   // fill in faces
-  
+  stk::mesh::Selector s_face = stk::mesh::Selector(*originalPart_);
+
+  stk::mesh::BucketVector const& face_buckets =
+    bulkData_->get_buckets(stk::topology::FACE_RANK, s_face );
+  for ( stk::mesh::BucketVector::const_iterator ib = face_buckets.begin();
+        ib != face_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
+      
+      // get face and face id
+      stk::mesh::Entity face = b[k];
+      const stk::mesh::EntityId faceId = bulkData_->identifier(face);
+
+      // extract node relations from the face and node count
+      stk::mesh::Entity const * face_node_rels =  bulkData_->begin_nodes(face);
+      const int numNodes = b.num_nodes(k);
+
+      // extract element center node
+      stk::mesh::Entity nodeC = promotedNodesVec_[promotedNodesVecCount];
+      double * elemCoordsC = stk::mesh::field_data(*coordinates_, nodeC);
+    
+      // hacked center coords calulation
+      std::vector<double>tmpCoord(nDim_,0.0);
+      for ( int ni = 0; ni < numNodes; ++ni ) {
+        stk::mesh::Entity theNode = face_node_rels[ni];
+        double * elemNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
+        for ( int i = 0; i < nDim_; ++i )
+          tmpCoord[i] += elemNodeCoords[i]/(double)numNodes;
+      }
+      
+      for ( int i = 0; i < nDim_; ++i )
+        elemCoordsC[i] = tmpCoord[i];
+      
+      parentFaceNodesMap_[faceId] = nodeC;
+      
+      ++promotedNodesVecCount;
+    }
+  }
+
   // element selectors; locally owned only
   stk::mesh::Selector s_elem = metaData_->locally_owned_part()
     & stk::mesh::Selector(*originalPart_);
@@ -617,7 +635,7 @@ SuperElement::create_nodes()
         stk::mesh::Entity theNode = node_rels[ni];
         double * elemNodeCoords = stk::mesh::field_data(*coordinates_, theNode);
         for ( int i = 0; i < nDim_; ++i )
-          tmpCoord[i] += elemNodeCoords[i]*0.25;
+          tmpCoord[i] += elemNodeCoords[i]/(double)numNodes;
       }
       
       for ( int i = 0; i < nDim_; ++i )
@@ -731,7 +749,6 @@ SuperElement::create_elements()
       
       // push back to map
       superElementElemMap_[elemId] = theElem;
-      
       availableElemIdCounter++;
     }
   }
@@ -745,25 +762,25 @@ SuperElement::create_elements()
 void
 SuperElement::create_elements_surface()
 {
-  /* WIP
   // find total number of locally owned elements
   size_t numNewSurfaceElem = 0;
+
+  // generic iterator for parentNodesMap_ and placeholder for the found node
+  std::map<stk::mesh::EntityId, stk::mesh::Entity>::iterator iterFindMap;
+  stk::mesh::Entity foundElem;
+  stk::mesh::Entity foundNode;
   
   // define vector of parent topos; should always be UNITY in size
   std::vector<stk::topology> parentTopo;
 
-  // generic iterator for parentElemMap_ and placeholder for the found element
-  std::map<stk::mesh::EntityIdVector, stk::mesh::Entity>::iterator iterFindMap;
-  stk::mesh::Entity thePromotedElement;
-
   // define some common selectors
-  stk::mesh::Selector s_locally_owned_union = metaData_->locally_owned_part()
+  stk::mesh::Selector s_low_order = metaData_->locally_owned_part()
   & stk::mesh::Selector(*originalSurfacePart_);
   
   stk::mesh::BucketVector const& face_buckets =
-  bulkData_->get_buckets(metaData_->side_rank(), s_locally_owned_union );
+    bulkData_->get_buckets(metaData_->side_rank(), s_low_order );
   for ( stk::mesh::BucketVector::const_iterator ib = face_buckets.begin();
-       ib != face_buckets.end() ; ++ib ) {
+        ib != face_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     numNewSurfaceElem += length;
@@ -779,60 +796,248 @@ SuperElement::create_elements_surface()
   // declare id counter
   size_t availableSurfaceElemIdCounter = 0;
   for ( stk::mesh::BucketVector::const_iterator ib = face_buckets.begin();
-       ib != face_buckets.end() ; ++ib ) {
+        ib != face_buckets.end() ; ++ib ) {
     stk::mesh::Bucket & b = **ib ;
     const stk::mesh::Bucket::size_type length   = b.size();
     
     // extract buckets face and element topology; not sure if we need this yet
-    stk::topology thisBucketsTopo = b.topology();
-    b.parent_topology(stk::topology::ELEMENT_RANK, parentTopo);
-    ThrowAssert ( parentTopo.size() == 1 );
-    stk::topology theElemTopo = parentTopo[0];
-    
+    /*
+      stk::topology thisBucketsTopo = b.topology();
+      b.parent_topology(stk::topology::ELEMENT_RANK, parentTopo);
+      ThrowAssert ( parentTopo.size() == 1 );
+      stk::topology theElemTopo = parentTopo[0];
+    */
+
     for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
       
-      // get face
+      // get face and its id
       stk::mesh::Entity face = b[k];
-      
+      const stk::mesh::EntityId faceId = bulkData_->identifier(face);
+    
       // extract the connected element to this exposed face; should be single in size!
       stk::mesh::Entity const * face_elem_rels = bulkData_->begin_elements(face);
       ThrowAssert( bulkData_->num_elements(face) == 1 );
       
-      // get element; its face ordinal number and populate face_node_ordinal_vec
-      stk::mesh::Entity element = face_elem_rels[0];
+      // get element, element id, and face ordinal number
+      stk::mesh::Entity elem = face_elem_rels[0];
+      const stk::mesh::EntityId elemId = bulkData_->identifier(elem);
       const int faceOrdinal = bulkData_->begin_element_ordinals(face)[0];
+      
+      // set local node count used for face:node relations
+      int localNodeCount = 0;
 
-      // vector to hold the element nodes
-      stk::mesh::Entity const * elem_node_rels = bulkData_->begin_nodes(element);
-      int numElemNodes = bulkData_->num_nodes(element);
-      stk::mesh::EntityIdVector volumeCentroidVec(numElemNodes);
-      for ( int ni = 0; ni < numElemNodes; ++ni ) {
-        stk::mesh::Entity node = elem_node_rels[ni];
-        volumeCentroidVec[ni] = bulkData_->identifier(node);
-      }
+      // declare the super face (with side rank) with current surface id
+      stk::mesh::Entity superFace 
+        = bulkData_->declare_entity(metaData_->side_rank(), 
+                                    availableSurfaceElemIds[availableSurfaceElemIdCounter], 
+                                    *superSurfacePart_);
       
-      // sort the nodes and find the element from the superElement volume part
-      std::sort(volumeCentroidVec.begin(), volumeCentroidVec.end());
-      
-      // find the edge centroid node(s)
-      iterFindMap = superElementElemMap_.find(volumeCentroidVec);
+      // find the super element
+      iterFindMap = superElementElemMap_.find(elemId);
       if ( iterFindMap != superElementElemMap_.end() ) {
-        thePromotedElement = iterFindMap->second;
+        foundElem = iterFindMap->second;
       }
       else {
-        throw std::runtime_error("Could not find the element beloging to element vector");
+        throw std::runtime_error("Could not find the super element beloging to low order element id: " + elemId );
       }
-     
-      // all done with element, edge and face node connectivitoes; create the element
-      stk::mesh::declare_element_side(*bulkData_, availableSurfaceElemIds[availableSurfaceElemIdCounter],
-                                      thePromotedElement, faceOrdinal, superElementSurfacePart_);
+      
+      // first, declare face:element relation
+      bulkData_->declare_relation(foundElem, superFace, faceOrdinal);
+
+      // next, face:node relations; parent element's face node first
+      stk::mesh::Entity const * face_node_rels = bulkData_->begin_nodes(face);
+      int num_face_nodes = bulkData_->num_nodes(face);
+      for ( int ni = 0; ni < num_face_nodes; ++ni ) {
+        stk::mesh::Entity node = face_node_rels[ni];
+        bulkData_->declare_relation(superFace, node, localNodeCount);
+        localNodeCount++;
+      }
+      
+      // now edges off of face      
+      std::vector<stk::mesh::Entity> foundEdgeNodes;
+
+      // find the connected edges to this face
+      stk::mesh::Entity const* face_edge_rels = bulkData_->begin_edges(face);
+
+      const int num_face_edges = bulkData_->num_edges(face);
+      
+      int num_edges = (nDim_ == 3) ? num_face_edges : 1;
+      
+      for ( int i = 0; i < num_edges; ++i ) {
+	
+	// get edgeId
+	const stk::mesh::EntityId edgeId = (nDim_ == 3) ? bulkData_->identifier(face_edge_rels[i]) : faceId;
+
+        // find the super node off the edge
+        iterFindMap = parentEdgeNodesMap_.find(edgeId);
+        if ( iterFindMap != parentEdgeNodesMap_.end() ) {
+          foundEdgeNodes.push_back(iterFindMap->second);
+        }
+        else {
+          throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
+        }
+        
+        // add nodes on each edge relation
+        for ( size_t j = 0; j < foundEdgeNodes.size(); ++j) {
+          bulkData_->declare_relation(superFace, foundEdgeNodes[j], localNodeCount);
+          localNodeCount++;
+        }
+      }
+
+      // now faces
+      if ( nDim_ == 3 ) {  
+        std::vector<stk::mesh::Entity> foundFaceNodes;
+        // find the super node off the face
+        iterFindMap = parentFaceNodesMap_.find(faceId);
+        if ( iterFindMap != parentFaceNodesMap_.end() ) {
+          foundFaceNodes.push_back(iterFindMap->second);
+        }
+        else {
+          throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + faceId );
+        }     
+      
+        // add final set of relations
+        for ( size_t j = 0; j < foundFaceNodes.size(); ++j) {
+          bulkData_->declare_relation(superFace, foundFaceNodes[j], localNodeCount);
+          localNodeCount++;
+        }
+      }
+
+      // increment available ids
       availableSurfaceElemIdCounter++;
     }
   }
   
   bulkData_->modification_end();
 
-*/
+  //=========================================
+  // now check surface 1
+  //=========================================
+
+  // set some gold standards
+  std::vector<stk::mesh::EntityId > nodeIdGold(3);
+  std::vector<stk::mesh::EntityId > nodeIdCheck;
+  nodeIdGold[0] = 3;
+  nodeIdGold[1] = 6;
+  nodeIdGold[2] = 11;
+  const int faceIdGold = 37;
+  const int nodesPerFaceGold = 3;
+  const int faceOrdinalGold = 2;
+  const int elemIdGold = 6;
+  
+  // logics
+  bool nodesPerFaceCheck = true;
+  bool faceOrdinalCheck = true;
+  bool faceIdCheck = true;
+  bool elemIdCheck = true; 
+  bool testNodeSizeCheck = true;
+  bool testNodeIdCheck = true;
+
+  // define some common selectors
+  stk::mesh::Selector s_high_order = metaData_->locally_owned_part()
+  & stk::mesh::Selector(*superSurfacePart_);
+  
+  stk::mesh::BucketVector const& high_face_buckets =
+    bulkData_->get_buckets(metaData_->side_rank(), s_high_order );
+  for ( stk::mesh::BucketVector::const_iterator ib = high_face_buckets.begin();
+        ib != high_face_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+        
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {
+      
+      // get face and its id
+      stk::mesh::Entity face = b[k];
+      const stk::mesh::EntityId faceId = bulkData_->identifier(face);
+      const int nodesPerFace = b.topology().num_nodes();
+      
+      if ( faceId != faceIdGold )
+        faceIdCheck = false;
+
+      if ( nodesPerFace != nodesPerFaceGold) 
+        nodesPerFaceCheck = false;
+      
+      if ( verboseOutput_ )
+        NaluEnv::self().naluOutputP0()  
+          << "faceId and nodes per face " << faceId << " " << nodesPerFace << std::endl;
+      
+      // extract the connected element to this exposed face; should be single in size!
+      stk::mesh::Entity const * face_elem_rels = bulkData_->begin_elements(face);
+      ThrowAssert( bulkData_->num_elements(face) == 1 );
+      
+      // get element, element id, and face ordinal number
+      stk::mesh::Entity elem = face_elem_rels[0];
+      const stk::mesh::EntityId elemId = bulkData_->identifier(elem);
+      const int faceOrdinal = bulkData_->begin_element_ordinals(face)[0];
+
+      if ( faceOrdinal != faceOrdinalGold )
+        faceOrdinalCheck = false;
+
+      if ( elemId != elemIdGold )
+        elemIdCheck = false;
+
+      if ( verboseOutput_ ) {
+        NaluEnv::self().naluOutputP0() << "elemId, face ordinal and nodesPerFace " << elemId << " " 
+                                       << faceOrdinal << " " << nodesPerFace << std::endl;
+      }
+
+      stk::mesh::Entity const * face_node_rels = bulkData_->begin_nodes(face);
+      int num_face_nodes = bulkData_->num_nodes(face);
+      // sanity check on num nodes
+      if ( num_face_nodes != nodesPerFace )
+        nodesPerFaceCheck = false;
+      for ( int ni = 0; ni < num_face_nodes; ++ni ) {
+        stk::mesh::Entity node = face_node_rels[ni];
+        const stk::mesh::EntityId nodeId = bulkData_->identifier(node);
+        if ( verboseOutput_ ) {
+          NaluEnv::self().naluOutputP0() << " surface check node id " << nodeId << std::endl;
+        }
+        nodeIdCheck.push_back(nodeId);
+      }
+    }
+  }
+
+  if ( nodeIdCheck.size() != nodeIdGold.size()) {
+    testNodeSizeCheck = false;
+    testNodeIdCheck = false;
+  }
+  else {
+    for ( size_t k = 0; k < nodeIdGold.size(); ++k ) {
+      if ( nodeIdGold[k] != nodeIdCheck[k] ) {
+        testNodeIdCheck = false;
+      }
+    } 
+  }
+
+  if ( testNodeSizeCheck )
+    NaluEnv::self().naluOutputP0() << "Surface node size Test      PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Surface node size Test      FAILED" << std::endl;
+
+  if ( testNodeIdCheck )
+    NaluEnv::self().naluOutputP0() << "Surface node id Test        PASSED" << std::endl;
+  else
+    NaluEnv::self().naluOutputP0() << "Surface node id Test        FAILED" << std::endl;  
+
+ if ( nodesPerFaceCheck )
+    NaluEnv::self().naluOutputP0() << "Surface npf Test            PASSED" << std::endl;
+ else
+    NaluEnv::self().naluOutputP0() << "Surface npf Test            FAILED" << std::endl;
+
+ if ( faceOrdinalCheck )
+    NaluEnv::self().naluOutputP0() << "Surface face ordinal Test   PASSED" << std::endl;
+ else
+    NaluEnv::self().naluOutputP0() << "Surface face ordinal Test   FAILED" << std::endl;
+
+ if ( faceIdCheck )
+    NaluEnv::self().naluOutputP0() << "Surface face Id Test        PASSED" << std::endl;
+ else
+    NaluEnv::self().naluOutputP0() << "Surface face Id Test        FAILED" << std::endl;
+
+ if ( elemIdCheck )
+    NaluEnv::self().naluOutputP0() << "Surface elem Id Test        PASSED" << std::endl;
+ else
+    NaluEnv::self().naluOutputP0() << "Surface elem Id Test        FAILED" << std::endl;
 }
   
 //--------------------------------------------------------------------------
@@ -860,12 +1065,12 @@ SuperElement::register_fields_surface()
 {
   // declare and put surface nodal field on part
   nodeSurfaceField_ = &(metaData_->declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "node_surface_field"));
-  stk::mesh::put_field(*nodeSurfaceField_, *superElementSurfacePart_);
+  stk::mesh::put_field(*nodeSurfaceField_, *superSurfacePart_);
  
   // declare and put surface field on part
   stk::topology::rank_t sideRank = static_cast<stk::topology::rank_t>(metaData_->side_rank());
   surfaceField_ = &(metaData_->declare_field<GenericFieldType>(sideRank, "surface_field"));
-  stk::mesh::put_field(*surfaceField_, *superElementSurfacePart_, 8);
+  stk::mesh::put_field(*surfaceField_, *superSurfacePart_, 8);
 }
   
 //--------------------------------------------------------------------------
@@ -974,8 +1179,8 @@ SuperElement::initialize_fields()
   // now check nodes in the mesh based on super element part (same selector as above)
   size_t totalNumNodes = 0;
   size_t goldTotalNumNodes = 21;
-  int goldNodalOrder[21] = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-    20, 21, 4, 5, 7, 8, 3, 6, 2, 1};
+  int goldNodalOrder[21] = {9, 10, 12, 13, 14, 15, 16, 17, 18, 19,
+                            20, 21, 11, 4, 5, 7, 8, 2, 1, 3, 6};
  
   int goldNodalOrderCount = 0;
   bool testNodalPassed = true;
@@ -998,7 +1203,8 @@ SuperElement::initialize_fields()
       stk::mesh::Entity node = b[k];
       
       if ( verboseOutput_ )
-        NaluEnv::self().naluOutputP0() << "node identifier: " << bulkData_->identifier(node) << std::endl;
+        NaluEnv::self().naluOutputP0() << "node identifier: " << bulkData_->identifier(node) 
+                                       << " " << goldNodalOrder[goldNodalOrderCount] << std::endl;
       
       if ( bulkData_->identifier(node) == goldNodalOrder[goldNodalOrderCount] ) {
         if ( verboseOutput_ )
