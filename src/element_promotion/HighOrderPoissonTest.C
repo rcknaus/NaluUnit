@@ -67,7 +67,9 @@ HighOrderPoissonTest::HighOrderPoissonTest(std::string meshName)
     order_(10),
     outputTiming_(false),
     timeCondense_(0.0),
-    timeInteriorUpdate_(0.0)
+    timeInteriorUpdate_(0.0),
+    testTolerance_(1.0e-8), // 1.0e-8 is conservative even for the randomly perturbed case
+    randomlyPerturbCoordinates_(true)
 {
   // Nothing
 }
@@ -157,11 +159,11 @@ struct MMSFunction {
     double y = pos[1];
     double source = 0.0;
     if (dim == 2) {
-     source = (k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y));
+     source = -(k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y));
     }
     else {
       double z = pos[2];
-      source = (k*pi)*(k*pi) * (
+      source = -(k*pi)*(k*pi) * (
           std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y) + std::cos(2.0*k*pi*z)
       );
     }
@@ -242,13 +244,10 @@ void HighOrderPoissonTest::assemble_poisson()
   int lhsSize = nodesPerElement * nodesPerElement;
   int numScsIp = meSCS_->numIntPoints_;
   int numScvIp = meSCV_->numIntPoints_;
-  int numLines = dim * elem_->polyOrder;
-  int ipsPerFace = elem_->nodesPerFace;
 
   // allocate scratch arrays
   std::vector<double> lhs(lhsSize, 0.0);
   std::vector<double> rhs(nodesPerElement, 0.0);
-  std::vector<double> lhst(lhsSize, 0.0);
 
   auto quadOp = SGLQuadratureOps(*elem_);
   auto condenser = ElementCondenser(*elem_);
@@ -326,9 +325,9 @@ void HighOrderPoissonTest::assemble_poisson()
       meSCS_->determinant(1, coordinates.data(), areav.data(), &scs_error);
       meSCS_->grad_op(1, coordinates.data(), dndx.data(), deriv.data(), detj_surf.data(), &scs_error);
 
-      // Save off interpolated values at surface IPs
+      // Save off grad N \cdot A at ips
       // TODO(rcknaus): this can be done more cheaply using sum factorization,
-      //since we're interpolating to values aligned with nodes in the orthogonal direction.
+      // since we're interpolating to values aligned with nodes in the orthogonal direction.
       for (int ip = 0; ip < numScsIp; ++ip) {
         double qDiff = 0.0;
         for (int ic = 0; ic < nodesPerElement; ++ic) {
@@ -345,31 +344,21 @@ void HighOrderPoissonTest::assemble_poisson()
 
       // integrate surfaces
       // LHS contrib
-      int node_offset = 0;
-      for (int ic = 0; ic < nodesPerElement; ++ic) {
-        int line_offset = 0;
-        for (int lineNumber = 0; lineNumber < numLines; ++lineNumber) {
-          if (dim == 2) {
-            quadOp.surface_2D(lhs_integrand.data(), lhs_integrated.data(),  node_offset + line_offset);
-          }
-          else {
-            quadOp.surface_3D(lhs_integrand.data(), lhs_integrated.data(),  node_offset + line_offset);
-          }
-          line_offset += ipsPerFace;
+      if (dim == 2) {
+        int node_offset = 0;
+        for (int ic = 0; ic < nodesPerElement; ++ic) {
+          quadOp.surfaces_2D(&lhs_integrand[node_offset], &lhs_integrated[node_offset]);
+          node_offset += numScsIp;
         }
-        node_offset += numScsIp;
+        quadOp.surfaces_2D(rhs_integrand.data(), rhs_integrated.data());
       }
-
-      // RHS contrib
-      int line_offset = 0;
-      for (int lineNumber = 0; lineNumber < numLines; ++lineNumber) {
-        if (dim == 2) {
-          quadOp.surface_2D(rhs_integrand.data(), rhs_integrated.data(), line_offset);
+      else {
+        int node_offset = 0;
+        for (int ic = 0; ic < nodesPerElement; ++ic) {
+          quadOp.surfaces_3D(&lhs_integrand[node_offset], &lhs_integrated[node_offset]);
+          node_offset += numScsIp;
         }
-        else {
-          quadOp.surface_3D(rhs_integrand.data(), rhs_integrated.data(), line_offset);
-        }
-        line_offset += ipsPerFace;
+        quadOp.surfaces_3D(rhs_integrand.data(), rhs_integrated.data());
       }
 
       // scatter
@@ -391,10 +380,11 @@ void HighOrderPoissonTest::assemble_poisson()
 
       double scv_error = 0.0;
       meSCV_->determinant(1, coordinates.data(), detj_vol.data(), &scv_error);
+      // for that time being, the 2D and 3D volume quadrature routines assume a different ordering of ips (nodes)
       if (dim == 2) {
         for (int ip = 0; ip < nodesPerElement; ++ip) {
           auto nearestNode = ipNodeMap[ip];
-          nodalSource[ip] = func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
+          nodalSource[ip] = -func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
         }
         quadOp.volume_2D(nodalSource.data(), source_integrated.data());
 
@@ -406,7 +396,7 @@ void HighOrderPoissonTest::assemble_poisson()
       else {
         for (int ip = 0; ip < nodesPerElement; ++ip) {
           auto nearestNode = ipNodeMap[ip];
-          nodalSource[nearestNode] = func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
+          nodalSource[nearestNode] = -func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
         }
         quadOp.volume_3D(nodalSource.data(), source_integrated.data());
 
@@ -415,6 +405,7 @@ void HighOrderPoissonTest::assemble_poisson()
           rhs[ni] += source_integrated[ni];
         }
       }
+
 
       // condense out the internal degrees of freedom from the LHS/RHS
       double timeA = MPI_Wtime();
@@ -443,8 +434,6 @@ void HighOrderPoissonTest::update_field()
   int lhsSize = nodesPerElement * nodesPerElement;
   int numScsIp = meSCS_->numIntPoints_;
   int numScvIp = meSCV_->numIntPoints_;
-  int numLines = dim * elem_->polyOrder;
-  int ipsPerFace = elem_->nodesPerFace;
 
   // allocate scratch arrays
   std::vector<double> lhs(lhsSize, 0.0);
@@ -557,31 +546,21 @@ void HighOrderPoissonTest::update_field()
 
       // integrate surfaces
       // LHS contrib
-      int node_offset = 0;
-      for (int ic = 0; ic < nodesPerElement; ++ic) {
-        int line_offset = 0;
-        for (int lineNumber = 0; lineNumber < numLines; ++lineNumber) {
-          if (dim == 2) {
-            quadOp.surface_2D(lhs_integrand.data(), lhs_integrated.data(),  node_offset + line_offset);
-          }
-          else {
-            quadOp.surface_3D(lhs_integrand.data(), lhs_integrated.data(),  node_offset + line_offset);
-          }
-          line_offset += ipsPerFace;
+      if (dim == 2) {
+        int node_offset = 0;
+        for (int ic = 0; ic < nodesPerElement; ++ic) {
+          quadOp.surfaces_2D(&lhs_integrand[node_offset], &lhs_integrated[node_offset]);
+          node_offset += numScsIp;
         }
-        node_offset += numScsIp;
+        quadOp.surfaces_2D(rhs_integrand.data(), rhs_integrated.data());
       }
-
-      // RHS contrib
-      int line_offset = 0;
-      for (int lineNumber = 0; lineNumber < numLines; ++lineNumber) {
-        if (dim == 2) {
-          quadOp.surface_2D(rhs_integrand.data(), rhs_integrated.data(), line_offset);
+      else {
+        int node_offset = 0;
+        for (int ic = 0; ic < nodesPerElement; ++ic) {
+          quadOp.surfaces_3D(&lhs_integrand[node_offset], &lhs_integrated[node_offset]);
+          node_offset += numScsIp;
         }
-        else {
-          quadOp.surface_3D(rhs_integrand.data(), rhs_integrated.data(), line_offset);
-        }
-        line_offset += ipsPerFace;
+        quadOp.surfaces_3D(rhs_integrand.data(), rhs_integrated.data());
       }
 
       // scatter
@@ -606,7 +585,7 @@ void HighOrderPoissonTest::update_field()
       if (dim == 2) {
         for (int ip = 0; ip < nodesPerElement; ++ip) {
           auto nearestNode = ipNodeMap[ip];
-          nodalSource[ip] = func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
+          nodalSource[ip] = -func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
         }
         quadOp.volume_2D(nodalSource.data(), source_integrated.data());
 
@@ -618,7 +597,7 @@ void HighOrderPoissonTest::update_field()
       else {
         for (int ip = 0; ip < nodesPerElement; ++ip) {
           auto nearestNode = ipNodeMap[ip];
-          nodalSource[nearestNode] = func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
+          nodalSource[nearestNode] = -func.exact_laplacian(&coordinates[nearestNode * dim]) * detj_vol[ip];
         }
         quadOp.volume_3D(nodalSource.data(), source_integrated.data());
 
@@ -669,14 +648,13 @@ bool HighOrderPoissonTest::check_solution()
   }
 
   // error should be small for high order
-  double tol = 1.0e-10; // can get to < 1.0e-14, but it's slow (for a test) in 3D
-  if (maxError >= tol) {
+  if (maxError >= testTolerance_) {
     NaluEnv::self().naluOutputP0()
         << "Poisson test failed with a maximum error of "
         << maxError << " vs a tolerance of "
-        << tol << ", ";
+        << testTolerance_ << ", ";
   }
-  return (maxError < tol);
+  return (maxError < testTolerance_);
 }
 //--------------------------------------------------------------------------
 void
@@ -695,15 +673,19 @@ HighOrderPoissonTest::setup_mesh()
   ioBroker_->create_input_mesh();
 
   elem_ = ElementDescription::create(metaData_->spatial_dimension(), order_, "SGL", true);
+  ThrowRequire(elem_.get() != nullptr);
   meSCV_ = make_master_volume_element(*elem_);
   meSCS_ = make_master_subcontrol_surface_element(*elem_);
-  ThrowRequire(elem_.get() != nullptr);
 
   setup_super_parts();
   register_fields();
 
   // populate bulk data
   ioBroker_->populate_bulk_data();
+
+  if (randomlyPerturbCoordinates_) {
+    perturb_coordinates(0.5, 0.15);
+  }
 
   bulkData_->modification_begin();
   PromoteElement(*elem_).promote_elements(
@@ -842,6 +824,29 @@ HighOrderPoissonTest::set_output_fields()
 }
 //--------------------------------------------------------------------------
 void
+HighOrderPoissonTest::perturb_coordinates(double elem_size, double fac)
+{
+  std::mt19937 rng;
+  rng.seed(std::random_device()());
+  std::uniform_real_distribution<double> coeff(-fac*elem_size, fac*elem_size);
+
+  auto selector = stk::mesh::selectUnion(originalPartVector_);
+  const auto& node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK, selector);
+
+  int dim = metaData_->spatial_dimension();
+  for (const auto ib : node_buckets ) {
+    const auto& b = *ib ;
+    const auto length  = b.size();
+    double* coords = stk::mesh::field_data(*coordinates_, b);
+    for ( size_t k = 0 ; k < length ; ++k ) {
+      for (int j = 0; j < dim; ++j) {
+        coords[k*dim+j] += coeff(rng);
+      }
+    }
+  }
+}
+//--------------------------------------------------------------------------
+void
 HighOrderPoissonTest::initialize_fields()
 {
   int dim = metaData_->spatial_dimension();
@@ -873,19 +878,6 @@ HighOrderPoissonTest::initialize_fields()
       for (int j = 0; j < numBoundaryNodes; ++j) {
         *static_cast<int*>(stk::mesh::field_data(*mask_, node_rels[j])) = 1;
       }
-    }
-  }
-
-  const auto& face_node_buckets = bulkData_->get_buckets(
-    stk::topology::NODE_RANK,
-    stk::mesh::selectUnion(superSidePartVector_)
-  );
-  for (const auto ib : face_node_buckets ) {
-    const auto& b = *ib ;
-    double* q = stk::mesh::field_data(*q_, b);
-    const auto length   = b.size();
-    for ( size_t k = 0 ; k < length ; ++k ) {
-      q[k] = 0.0;
     }
   }
 }

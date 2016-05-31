@@ -64,6 +64,8 @@ PromoteElement::promote_elements(
   ThrowRequireMsg(mesh.in_modifiable_state(),
     "Mesh must be in a modifiable state for element promotion");
 
+  ThrowRequire(check_parts_for_promotion(baseParts));
+
   auto basePartSelector = stk::mesh::selectUnion(baseParts);
   auto nodeRequests = create_child_node_requests(elemDescription_, mesh, basePartSelector);
   determine_child_ordinals(elemDescription_,mesh, nodeRequests);
@@ -224,17 +226,19 @@ PromoteElement::parallel_communicate_ids(
     for (const auto& request : requests) {
       for (auto other_proc : request.sharingProcs_) {
         if (other_proc != mesh.parallel_rank()) {
-          const auto& request_parents = request.unsortedParentIds_;
-          const auto numChildren = request.num_children();
-          comm_spec.send_buffer(other_proc).pack(request.num_parents());
+          const size_t numParents = request.num_parents();
+          comm_spec.send_buffer(other_proc).pack(numParents);
+
+          const size_t numChildren = request.num_children();
           comm_spec.send_buffer(other_proc).pack(numChildren);
-          for (auto parentId : request_parents) {
+
+          const std::vector<stk::mesh::EntityId>& request_parents = request.unsortedParentIds_;
+          for (stk::mesh::EntityId parentId : request_parents) {
             comm_spec.send_buffer(other_proc).pack(parentId);
           }
 
           for (unsigned j = 0; j < numChildren; ++j) {
-            comm_spec.send_buffer(other_proc).pack(
-              request.suggested_node_id(j));
+            comm_spec.send_buffer(other_proc).pack(request.suggested_node_id(j));
           }
         }
       }
@@ -252,15 +256,14 @@ PromoteElement::parallel_communicate_ids(
   for (int i = 0; i < mesh.parallel_size(); ++i) {
     if (i != mesh.parallel_rank()) {
       while (comm_spec.recv_buffer(i).remaining() != 0) {
-
         size_t num_parents;
-        size_t num_children;
-        stk::mesh::EntityId suggested_node_id;
         comm_spec.recv_buffer(i).unpack(num_parents);
-        comm_spec.recv_buffer(i).unpack(num_children);
-        std::vector<stk::mesh::EntityId> parentIds(num_parents);
 
-        for (auto& parentId : parentIds) {
+        size_t num_children;
+        comm_spec.recv_buffer(i).unpack(num_children);
+
+        std::vector<stk::mesh::EntityId> parentIds(num_parents);
+        for (stk::mesh::EntityId& parentId : parentIds) {
           comm_spec.recv_buffer(i).unpack(parentId);
         }
 
@@ -311,6 +314,7 @@ PromoteElement::parallel_communicate_ids(
 
         for (unsigned j = 0; j < num_children; ++j) {
           //always unpack to keep the correct place in buffer
+          stk::mesh::EntityId suggested_node_id;
           comm_spec.recv_buffer(i).unpack(suggested_node_id);
 
           // Add a proc_id pair between coincident shared nodes

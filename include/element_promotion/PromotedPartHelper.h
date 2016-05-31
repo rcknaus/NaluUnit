@@ -27,6 +27,8 @@ namespace naluUnit {
 
   bool part_vector_is_valid(const stk::mesh::PartVector& parts);
 
+  bool check_parts_for_promotion(const stk::mesh::PartVector& parts);
+
   std::string super_element_part_name(std::string base_name);
 
   std::string super_subset_part_name(const std::string& base_name, int numElemNodes, int numSideNodes);

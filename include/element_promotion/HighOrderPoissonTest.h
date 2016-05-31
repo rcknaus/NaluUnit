@@ -75,6 +75,8 @@ public:
 
   void setup_super_parts();
 
+  void perturb_coordinates(double elem_size, double fac);
+
   void solve_poisson();
 
   std::unique_ptr<MasterElement>
@@ -93,6 +95,8 @@ public:
   const bool outputTiming_;
   double timeCondense_;
   double timeInteriorUpdate_;
+  const double testTolerance_;
+  const bool randomlyPerturbCoordinates_;
 
   std::string fineOutputName_;
 

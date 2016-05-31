@@ -42,7 +42,6 @@ public:
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
   std::vector<double> geometricShapeDerivs_;
-  double* p_geometricShapeDerivs_;
   int geometricNodesPerElement_;
 
 private:
@@ -66,7 +65,7 @@ public:
     const int nelem,
     const double *coords,
     double *areav,
-    double * error ) final;
+    double * error) final;
 
   void grad_op(
     const int nelem,
@@ -74,7 +73,7 @@ public:
     double *gradop,
     double *deriv,
     double *det_j,
-    double * error ) final;
+    double * error) final;
 
   void face_grad_op(
     const int nelem,
@@ -82,7 +81,7 @@ public:
     const double *coords,
     double *gradop,
     double *det_j,
-    double * error ) final;
+    double * error) final;
 
   void gij(
     const double *coords,
@@ -105,7 +104,6 @@ public:
   std::vector<double> shapeDerivs_;
   std::vector<double> expFaceShapeDerivs_;
   std::vector<double> geometricShapeDerivs_;
-  double* p_geometricShapeDerivs_;
   int geometricNodesPerElement_;
 
 private:
@@ -120,6 +118,13 @@ private:
 
   void gradient(
     const double* elemNodalCoords,
+    const double* shapeDeriv,
+    double* grad,
+    double* det_j ) const;
+
+  void gradient(
+    const double* elemNodalCoords,
+    const double* geometricShapeDeriv,
     const double* shapeDeriv,
     double* grad,
     double* det_j ) const;
@@ -199,7 +204,6 @@ public:
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
   std::vector<double> geometricShapeDerivs_;
-  double* p_geometricShapeDerivs_;
   int geometricNodesPerElement_;
 private:
   void set_interior_info();
@@ -259,7 +263,6 @@ public:
   std::vector<double> shapeFunctions_;
   std::vector<double> shapeDerivs_;
   std::vector<double> geometricShapeDerivs_;
-  double* p_geometricShapeDerivs_;
   int geometricNodesPerElement_;
 private:
   void set_interior_info();
@@ -276,6 +279,13 @@ private:
     const double* shapeDeriv,
     double* grad,
     double* det_j) const;
+
+  void gradient(
+    const double* elemNodalCoords,
+    const double* geometricShapeDeriv,
+    const double* shapeDeriv,
+    double* grad,
+    double* det_j ) const;
 
   std::vector<ContourData> ipInfo_;
   int ipsPerFace_;
@@ -312,7 +322,7 @@ private:
   std::vector<double> shapeDerivs_;
 };
 
-} // namespace naluUnit
+} // namespace nalu
 } // namespace Sierra
 
 #endif

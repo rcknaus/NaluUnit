@@ -5,11 +5,13 @@
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
 #include <element_promotion/PromotedPartHelper.h>
+#include <NaluEnv.h>
 
 #include <stk_mesh/base/MetaData.hpp>
 #include <stk_mesh/base/Part.hpp>
 #include <stk_util/environment/ReportHandler.hpp>
 #include <stk_topology/topology.hpp>
+
 
 #include <algorithm>
 #include <vector>
@@ -23,6 +25,53 @@ namespace naluUnit{
     return (std::find(parts.begin(), parts.end(), nullptr) == parts.end() && !parts.empty() );
   }
   //--------------------------------------------------------------------------
+  bool check_part_topo(const stk::mesh::Part& part) {
+    const int dim = part.mesh_meta_data().spatial_dimension();
+    bool is_valid_elem_rank = false;
+    const stk::topology topo = part.topology();
+    if (topo.rank() == stk::topology::ELEM_RANK) {
+      is_valid_elem_rank = (dim == 2) ? topo == stk::topology::QUAD_4_2D : topo == stk::topology::HEX_8;
+    }
+
+    bool is_valid_side_rank = false;
+    if (topo.rank() == part.mesh_meta_data().side_rank()) {
+      is_valid_side_rank = (dim == 2) ? topo == stk::topology::LINE_2 : topo == stk::topology::QUAD_4;
+    }
+
+    if (!(is_valid_side_rank || is_valid_elem_rank)) {
+      NaluEnv::self().naluOutputP0()
+                  << "Part "  << part.name()
+                  << " has an invalid topology for promotion, " << topo.name()
+                  << "---only pure Hex/Quad meshes are currently supported." << std::endl;
+
+      return false;
+    }
+    return true;
+  }
+  //--------------------------------------------------------------------------
+  bool check_parts_for_promotion(const stk::mesh::PartVector& parts)
+  {
+    for (const auto* ip : parts) {
+      ThrowRequireMsg(ip != nullptr, "An invalid part was designated for promotion.");
+      const stk::mesh::Part& part = *ip;
+      if (part.subsets().empty()) {
+        if (!check_part_topo(part)) {
+          return false;
+        }
+      }
+      else {
+        for (const auto* is : part.subsets()) {
+          ThrowRequireMsg(is != nullptr, "An invalid subset part was designated for promotion.");
+          const stk::mesh::Part& subsetPart = *is;
+          if (!check_part_topo(subsetPart)) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  }
+  //--------------------------------------------------------------------------
   std::string super_element_suffix()
   {
     return "se";
@@ -31,7 +80,7 @@ namespace naluUnit{
   std::string super_element_part_name(std::string base_name)
   {
     ThrowAssertMsg(!base_name.empty(), "Empty base name for super elem part");
-    return (base_name.insert(base_name.find_first_of("_"),super_element_suffix()));
+    return (base_name + super_element_suffix());
   }
   //--------------------------------------------------------------------------
   std::string super_subset_part_name(const std::string& base_name, int numElemNodes, int numSideNodes)

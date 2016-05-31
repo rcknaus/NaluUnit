@@ -12,6 +12,7 @@
 #include <stk_util/environment/ReportHandler.hpp>
 
 #include <array>
+#include <limits>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -36,10 +37,10 @@ HigherOrderHexSCV::HigherOrderHexSCV(const ElementDescription& elem)
 
   if (elem.useReducedGeometricBasis) {
     geometricShapeDerivs_ = elem.linearBasis->eval_deriv_weights(intgLoc_);
-    p_geometricShapeDerivs_ = geometricShapeDerivs_.data();
+    geometricNodesPerElement_ = 8;
   }
   else {
-    p_geometricShapeDerivs_ = shapeDerivs_.data();
+    geometricShapeDerivs_ = shapeDerivs_;
     geometricNodesPerElement_ = nodesPerElement_;
   }
 }
@@ -118,26 +119,26 @@ void HigherOrderHexSCV::determinant(
   double *error)
 {
   *error = 0.0;
-  for (int k = 0; k < nelem; ++k) {
-    const int scalar_elem_offset = numIntPoints_ * k;
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = nDim_ * geometricNodesPerElement_  * ip;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
 
-      //weighted jacobian determinant
-      const double det_j = jacobian_determinant(
-        &coords[coord_elem_offset],
-        &p_geometricShapeDerivs_[grad_offset]
-      );
+  int geometric_grad_offset = 0;
+  int geometric_grad_inc = nDim_ * geometricNodesPerElement_;
 
-      //apply weight and store to volume
-      volume[scalar_elem_offset + ip] = ipWeight_[ip] * det_j;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    //weighted jacobian determinant
+    const double det_j = jacobian_determinant(
+      coords,
+      &geometricShapeDerivs_[geometric_grad_offset]
+    );
 
-      //flag error
-      if (det_j < 0.0) {
-        *error = 1.0;
-      }
+    //apply weight and store to volume
+    volume[ip] = ipWeight_[ip] * det_j;
+
+    //flag error
+    if (det_j < std::numeric_limits<double>::min()) {
+      *error = 1.0;
     }
+    geometric_grad_offset += geometric_grad_inc;
   }
 }
 //--------------------------------------------------------------------------
@@ -158,6 +159,7 @@ HigherOrderHexSCV::jacobian_determinant(
 
     const double dn_ds1 = shapeDerivs[vector_offset+0];
     const double dn_ds2 = shapeDerivs[vector_offset+1];
+
     const double dn_ds3 = shapeDerivs[vector_offset+2];
 
     dx_ds1 += dn_ds1 * xCoord;
@@ -200,10 +202,10 @@ HigherOrderHexSCS::HigherOrderHexSCS(const ElementDescription& elem)
 
   if (elem.useReducedGeometricBasis) {
     geometricShapeDerivs_ = elem.linearBasis->eval_deriv_weights(intgLoc_);
-    p_geometricShapeDerivs_ = geometricShapeDerivs_.data();
+    geometricNodesPerElement_ = 8;
   }
   else {
-    p_geometricShapeDerivs_ = shapeDerivs_.data();
+    geometricShapeDerivs_ = shapeDerivs_;
     geometricNodesPerElement_ = nodesPerElement_;
   }
 }
@@ -212,7 +214,7 @@ void
 HigherOrderHexSCS::set_interior_info()
 {
   const int surfacesPerDirection = elem_.nodes1D - 1;
-  const int ipsPerSurface = (elem_.numQuad*elem_.numQuad)*(elem_.nodes1D*elem_.nodes1D);
+  const int ipsPerSurface = (elem_.numQuad * elem_.numQuad) * (elem_.nodes1D * elem_.nodes1D);
   const int numSurfaces = surfacesPerDirection * nDim_;
 
   numIntPoints_ = numSurfaces*ipsPerSurface;
@@ -623,30 +625,27 @@ HigherOrderHexSCS::determinant(
   //returns the normal vector x_t x x_u for constant s curves
   //returns the normal vector x_u x x_s for constant t curves
   //returns the normal vector x_s x x_t for constant u curves
+  *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
+  int geometric_grad_offset = 0;
+  const int geometric_grad_inc = nDim_ * geometricNodesPerElement_;
+  int vector_offset = 0;
   std::array<double,3> areaVector;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
 
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int vector_elem_offset = nDim_ * numIntPoints_ * k;
+    //compute area vector for this ip
+    area_vector( ipInfo_[ip].direction,
+      coords,
+      &geometricShapeDerivs_[geometric_grad_offset],
+      areaVector );
 
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = nDim_ * geometricNodesPerElement_ * ip;
-      const int offset = nDim_ * ip + vector_elem_offset;
-
-      //compute area vector for this ip
-      area_vector( ipInfo_[ip].direction,
-        &coords[coord_elem_offset],
-        &p_geometricShapeDerivs_[grad_offset],
-        areaVector );
-
-      // apply quadrature weight and orientation (combined as weight)
-      for (int j = 0; j < nDim_; ++j) {
-        areav[offset+j]  = ipInfo_[ip].weight * areaVector[j];
-      }
+    // apply quadrature weight and orientation (combined as weight)
+    for (int j = 0; j < nDim_; ++j) {
+      areav[vector_offset+j]  = ipInfo_[ip].weight * areaVector[j];
     }
+    geometric_grad_offset += geometric_grad_inc;
+    vector_offset += nDim_;
   }
-
-  *error = 0;
 }
 //--------------------------------------------------------------------------
 void
@@ -712,28 +711,33 @@ void HigherOrderHexSCS::grad_op(
   double *det_j,
   double *error)
 {
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int scalar_elem_offset = numIntPoints_ * k;
-    const int grad_elem_offset = numIntPoints_ * nDim_ * nodesPerElement_ * k;
+  *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "Grad_op is executed one element at a time for HO");
 
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = nDim_ * nodesPerElement_ * ip;
-      const int offset = grad_offset + grad_elem_offset;
+  int grad_offset = 0;
+  int grad_inc = nDim_ * nodesPerElement_;
 
-      for (int j = 0; j < nodesPerElement_ * nDim_; ++j) {
-        deriv[offset + j] = shapeDerivs_[grad_offset +j];
-      }
+  int geometric_grad_offset = 0;
+  int geometric_grad_inc = nDim_ * geometricNodesPerElement_;
 
-      gradient( &coords[coord_elem_offset],
-        &shapeDerivs_[grad_offset],
-        &gradop[offset],
-        &det_j[scalar_elem_offset+ip] );
-
-      if (det_j[ip] <= 0.0) {
-        *error = 1.0;
-      }
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    for (int j = 0; j < grad_inc; ++j) {
+      deriv[grad_offset + j] = shapeDerivs_[grad_offset +j];
     }
+
+    gradient(
+      coords,
+      &geometricShapeDerivs_[geometric_grad_offset],
+      &shapeDerivs_[grad_offset],
+      &gradop[grad_offset],
+      &det_j[ip] );
+
+    if (det_j[ip] < std::numeric_limits<double>::min()) {
+      *error = 1.0;
+    }
+
+    grad_offset += grad_inc;
+    geometric_grad_offset += geometric_grad_inc;
   }
 }
 
@@ -748,25 +752,27 @@ void HigherOrderHexSCS::face_grad_op(
   double *det_j,
   double *error)
 {
+  *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "face_grad_op is executed one element at a time for HO");
+
+  int grad_offset = 0;
+  int grad_inc = nDim_ * nodesPerElement_;
+
   const int face_offset =  nDim_ * ipsPerFace_ * nodesPerElement_ * face_ordinal;
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int scalar_elem_offset = ipsPerFace_ * k;
-    const int grad_elem_offset = ipsPerFace_ * nDim_ * nodesPerElement_ * k;
+  const double* const faceShapeDerivs = &expFaceShapeDerivs_[face_offset];
 
-    for (int ip = 0; ip < ipsPerFace_; ++ip) {
-      const int grad_offset = nDim_ * nodesPerElement_ * ip;
-      const int offset = grad_offset + grad_elem_offset;
+  for (int ip = 0; ip < ipsPerFace_; ++ip) {
+    gradient(coords,
+      &faceShapeDerivs[grad_offset],
+      &gradop[grad_offset],
+      &det_j[ip]
+    );
 
-      gradient( &coords[coord_elem_offset],
-        &expFaceShapeDerivs_[face_offset+grad_offset],
-        &gradop[offset],
-        &det_j[scalar_elem_offset+ip] );
-
-      if (det_j[ip] <= 0.0) {
-        *error = 1.0;
-      }
+    if (det_j[ip] < std::numeric_limits<double>::min()) {
+      *error = 1.0;
     }
+
+    grad_offset += grad_inc;
   }
 }
 
@@ -776,6 +782,7 @@ void HigherOrderHexSCS::face_grad_op(
 void
 HigherOrderHexSCS::gradient(
   const double* elemNodalCoords,
+  const double* geometricShapeDeriv,
   const double* shapeDeriv,
   double* grad,
   double* det_j) const
@@ -785,16 +792,15 @@ HigherOrderHexSCS::gradient(
   double dz_ds1 = 0.0;  double dz_ds2 = 0.0; double dz_ds3 = 0.0;
 
   //compute Jacobian
-  for (int node = 0; node < nodesPerElement_; ++node) {
-    const int vector_offset = nDim_ * node;
-
+  int vector_offset = 0;
+  for (int node = 0; node < geometricNodesPerElement_; ++node) {
     const double xCoord = elemNodalCoords[vector_offset + 0];
     const double yCoord = elemNodalCoords[vector_offset + 1];
     const double zCoord = elemNodalCoords[vector_offset + 2];
 
-    const double dn_ds1 = shapeDeriv[vector_offset + 0];
-    const double dn_ds2 = shapeDeriv[vector_offset + 1];
-    const double dn_ds3 = shapeDeriv[vector_offset + 2];
+    const double dn_ds1 = geometricShapeDeriv[vector_offset + 0];
+    const double dn_ds2 = geometricShapeDeriv[vector_offset + 1];
+    const double dn_ds3 = geometricShapeDeriv[vector_offset + 2];
 
     dx_ds1 += dn_ds1 * xCoord;
     dx_ds2 += dn_ds2 * xCoord;
@@ -807,6 +813,8 @@ HigherOrderHexSCS::gradient(
     dz_ds1 += dn_ds1 * zCoord;
     dz_ds2 += dn_ds2 * zCoord;
     dz_ds3 += dn_ds3 * zCoord;
+
+    vector_offset += nDim_;
   }
 
   *det_j = dx_ds1 * ( dy_ds2 * dz_ds3 - dz_ds2 * dy_ds3 )
@@ -828,9 +836,8 @@ HigherOrderHexSCS::gradient(
   const double ds3_dz = inv_det_j*(dx_ds1 * dy_ds2 - dy_ds1 * dx_ds2);
 
   // metrics
+  vector_offset = 0;
   for (int node = 0; node < nodesPerElement_; ++node) {
-    const int vector_offset = nDim_ * node;
-
     const double dn_ds1 = shapeDeriv[vector_offset + 0];
     const double dn_ds2 = shapeDeriv[vector_offset + 1];
     const double dn_ds3 = shapeDeriv[vector_offset + 2];
@@ -838,6 +845,80 @@ HigherOrderHexSCS::gradient(
     grad[vector_offset + 0] = dn_ds1 * ds1_dx + dn_ds2 * ds2_dx + dn_ds3 * ds3_dx;
     grad[vector_offset + 1] = dn_ds1 * ds1_dy + dn_ds2 * ds2_dy + dn_ds3 * ds3_dy;
     grad[vector_offset + 2] = dn_ds1 * ds1_dz + dn_ds2 * ds2_dz + dn_ds3 * ds3_dz;
+
+    vector_offset += nDim_;
+  }
+}
+//--------------------------------------------------------------------------
+//-------- gradient --------------------------------------------------------
+//--------------------------------------------------------------------------
+void
+HigherOrderHexSCS::gradient(
+  const double* elemNodalCoords,
+  const double* shapeDeriv,
+  double* grad,
+  double* det_j) const
+{
+  double dx_ds1 = 0.0;  double dx_ds2 = 0.0; double dx_ds3 = 0.0;
+  double dy_ds1 = 0.0;  double dy_ds2 = 0.0; double dy_ds3 = 0.0;
+  double dz_ds1 = 0.0;  double dz_ds2 = 0.0; double dz_ds3 = 0.0;
+
+  //compute Jacobian
+  int vector_offset = 0;
+  for (int node = 0; node < nodesPerElement_; ++node) {
+    const double xCoord = elemNodalCoords[vector_offset + 0];
+    const double yCoord = elemNodalCoords[vector_offset + 1];
+    const double zCoord = elemNodalCoords[vector_offset + 2];
+
+    const double dn_ds1 = shapeDeriv[vector_offset + 0];
+    const double dn_ds2 = shapeDeriv[vector_offset + 1];
+    const double dn_ds3 = shapeDeriv[vector_offset + 2];
+
+    dx_ds1 += dn_ds1 * xCoord;
+    dx_ds2 += dn_ds2 * xCoord;
+    dx_ds3 += dn_ds3 * xCoord;
+
+    dy_ds1 += dn_ds1 * yCoord;
+    dy_ds2 += dn_ds2 * yCoord;
+    dy_ds3 += dn_ds3 * yCoord;
+
+    dz_ds1 += dn_ds1 * zCoord;
+    dz_ds2 += dn_ds2 * zCoord;
+    dz_ds3 += dn_ds3 * zCoord;
+
+    vector_offset += nDim_;
+  }
+
+  *det_j = dx_ds1 * ( dy_ds2 * dz_ds3 - dz_ds2 * dy_ds3 )
+         + dy_ds1 * ( dz_ds2 * dx_ds3 - dx_ds2 * dz_ds3 )
+         + dz_ds1 * ( dx_ds2 * dy_ds3 - dy_ds2 * dx_ds3 );
+
+  const double inv_det_j = (*det_j > 0.0) ? 1.0 / (*det_j) : 0.0;
+
+  const double ds1_dx = inv_det_j*(dy_ds2 * dz_ds3 - dz_ds2 * dy_ds3);
+  const double ds2_dx = inv_det_j*(dz_ds1 * dy_ds3 - dy_ds1 * dz_ds3);
+  const double ds3_dx = inv_det_j*(dy_ds1 * dz_ds2 - dz_ds1 * dy_ds2);
+
+  const double ds1_dy = inv_det_j*(dz_ds2 * dx_ds3 - dx_ds2 * dz_ds3);
+  const double ds2_dy = inv_det_j*(dx_ds1 * dz_ds3 - dz_ds1 * dx_ds3);
+  const double ds3_dy = inv_det_j*(dz_ds1 * dx_ds2 - dx_ds1 * dz_ds2);
+
+  const double ds1_dz = inv_det_j*(dx_ds2 * dy_ds3 - dy_ds2 * dx_ds3);
+  const double ds2_dz = inv_det_j*(dy_ds1 * dx_ds3 - dx_ds1 * dy_ds3);
+  const double ds3_dz = inv_det_j*(dx_ds1 * dy_ds2 - dy_ds1 * dx_ds2);
+
+  // metrics
+  vector_offset = 0;
+  for (int node = 0; node < nodesPerElement_; ++node) {
+    const double dn_ds1 = shapeDeriv[vector_offset + 0];
+    const double dn_ds2 = shapeDeriv[vector_offset + 1];
+    const double dn_ds3 = shapeDeriv[vector_offset + 2];
+
+    grad[vector_offset + 0] = dn_ds1 * ds1_dx + dn_ds2 * ds2_dx + dn_ds3 * ds3_dx;
+    grad[vector_offset + 1] = dn_ds1 * ds1_dy + dn_ds2 * ds2_dy + dn_ds3 * ds3_dy;
+    grad[vector_offset + 2] = dn_ds1 * ds1_dz + dn_ds2 * ds2_dz + dn_ds3 * ds3_dz;
+
+    vector_offset += nDim_;
   }
 }
 //--------------------------------------------------------------------------
@@ -849,7 +930,7 @@ void HigherOrderHexSCS::gij(
   double *glowerij,
   double *deriv)
 {
-  throw std::runtime_error("Not implemented in unit test");
+  throw std::runtime_error("gij not implemented in unit test");
 //  SIERRA_FORTRAN(threed_gij)
 //    ( &nodesPerElement_,
 //      &numIntPoints_,
@@ -938,26 +1019,23 @@ HigherOrderQuad3DSCS::determinant(
   double *areav,
   double * /*error*/)
 {
-  std::array<double,3> areaVector;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
 
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int vector_elem_offset = nDim_ * numIntPoints_ * k;
+  std::array<double, 3> areaVector;
+  int grad_offset = 0;
+  int grad_inc = surfaceDimension_ * nodesPerElement_;
 
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = surfaceDimension_ * nodesPerElement_ * ip;
-      const int offset = nDim_ * ip + vector_elem_offset;
+  int vector_offset = 0;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    //compute area vector for this ip
+    area_vector( &coords[0], &shapeDerivs_[grad_offset], areaVector );
 
-      //compute area vector for this ip
-      area_vector( &coords[coord_elem_offset],
-        &shapeDerivs_[grad_offset],
-        areaVector );
-
-      // apply quadrature weight and orientation (combined as weight)
-      for (int j = 0; j < nDim_; ++j) {
-        areav[offset+j]  = ipWeight_[ip] * areaVector[j];
-      }
+    // apply quadrature weight and orientation (combined as weight)
+    for (int j = 0; j < nDim_; ++j) {
+      areav[vector_offset+j]  = ipWeight_[ip] * areaVector[j];
     }
+    vector_offset += nDim_;
+    grad_offset += grad_inc;
   }
 }
 //--------------------------------------------------------------------------
@@ -1015,10 +1093,10 @@ HigherOrderQuad2DSCV::HigherOrderQuad2DSCV(const ElementDescription& elem)
 
   if (elem.useReducedGeometricBasis) {
     geometricShapeDerivs_ = elem.linearBasis->eval_deriv_weights(intgLoc_);
-    p_geometricShapeDerivs_ = geometricShapeDerivs_.data();
+    geometricNodesPerElement_ = 4;
   }
   else {
-    p_geometricShapeDerivs_ = shapeDerivs_.data();
+    geometricShapeDerivs_ = shapeDerivs_;
     geometricNodesPerElement_ = nodesPerElement_;
   }
 }
@@ -1078,26 +1156,27 @@ HigherOrderQuad2DSCV::determinant(
   double *error)
 {
   *error = 0.0;
-  for (int k = 0; k < nelem; ++k) {
-    const int scalar_elem_offset = numIntPoints_ * k;
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = nDim_ * geometricNodesPerElement_ * ip;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
 
-      //weighted jacobian determinant
-      const double det_j = jacobian_determinant(
-        &coords[coord_elem_offset],
-        &p_geometricShapeDerivs_[grad_offset]
-      );
+  int geometric_grad_offset = 0;
+  int geometric_grad_inc = nDim_ * geometricNodesPerElement_;
 
-      //apply weight and store to volume
-      volume[scalar_elem_offset + ip] = ipWeight_[ip] * det_j;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    //weighted jacobian determinant
+    const double det_j = jacobian_determinant(
+      coords,
+      &geometricShapeDerivs_[geometric_grad_offset]
+    );
 
-      //flag error
-      if (det_j <= 0.0) {
-        *error = 1.0;
-      }
+    //apply weight and store to volume
+    volume[ip] = ipWeight_[ip] * det_j;
+
+    //flag error
+    if (det_j < std::numeric_limits<double>::min()) {
+      *error = 1.0;
     }
+
+    geometric_grad_offset += geometric_grad_inc;
   }
 }
 //--------------------------------------------------------------------------
@@ -1149,10 +1228,10 @@ HigherOrderQuad2DSCS::HigherOrderQuad2DSCS(const ElementDescription& elem)
 
   if (elem.useReducedGeometricBasis) {
     geometricShapeDerivs_ = elem.linearBasis->eval_deriv_weights(intgLoc_);
-    p_geometricShapeDerivs_ = geometricShapeDerivs_.data();
+    geometricNodesPerElement_ = 4;
   }
   else {
-    p_geometricShapeDerivs_ = shapeDerivs_.data();
+    geometricShapeDerivs_ = shapeDerivs_;
     geometricNodesPerElement_ = nodesPerElement_;
   }
 }
@@ -1403,31 +1482,28 @@ HigherOrderQuad2DSCS::determinant(
 {
   //returns the normal vector (dyds,-dxds) for constant t curves
   //returns the normal vector (dydt,-dxdt) for constant s curves
+  *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
 
   std::array<double, 2> areaVector;
+  int grad_offset = 0;
+  const int grad_inc = nDim_ * geometricNodesPerElement_;
 
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int vector_elem_offset = nDim_*numIntPoints_*k;
+  int vector_offset = 0;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    //compute area vector for this ip
+    area_vector(ipInfo_[ip].direction,
+      coords,
+      &geometricShapeDerivs_[grad_offset],
+      areaVector );
 
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int grad_offset = nDim_ * geometricNodesPerElement_ * ip;
-      const int offset = nDim_ * ip + vector_elem_offset;
-
-      //compute area vector for this ip
-      area_vector( ipInfo_[ip].direction,
-                   &coords[coord_elem_offset],
-                   &p_geometricShapeDerivs_[grad_offset],
-                   areaVector );
-
-      // apply quadrature weight and orientation (combined as weight)
-      for (int j = 0; j < nDim_; ++j) {
-        areav[offset+j]  = ipInfo_[ip].weight * areaVector[j];
-      }
+    // apply quadrature weight and orientation (combined as weight)
+    for (int j = 0; j < nDim_; ++j) {
+      areav[vector_offset+j]  = ipInfo_[ip].weight * areaVector[j];
     }
+    grad_offset += grad_inc;
+    vector_offset += nDim_;
   }
-
-  *error = 0;
 }
 //--------------------------------------------------------------------------
 void HigherOrderQuad2DSCS::grad_op(
@@ -1439,29 +1515,32 @@ void HigherOrderQuad2DSCS::grad_op(
   double *error)
 {
   *error = 0.0;
-  ThrowAssertMsg(nelem == 1, "Grad_op is executed one element at a time for HO");
+  ThrowRequireMsg(nelem == 1, "Grad_op is executed one element at a time for HO");
 
   int grad_offset = 0;
-  int dim = 2;
+  int grad_inc = nDim_ * nodesPerElement_;
+
+  int geometric_grad_offset = 0;
+  int geometric_grad_inc = nDim_ * geometricNodesPerElement_;
   for (int ip = 0; ip < numIntPoints_; ++ip) {
-    for (int j = 0; j < nodesPerElement_ * dim; ++j) {
+    for (int j = 0; j < grad_inc; ++j) {
       deriv[grad_offset + j] = shapeDerivs_[grad_offset +j];
     }
 
     gradient(
       &coords[0],
+      &geometricShapeDerivs_[geometric_grad_offset],
       &shapeDerivs_[grad_offset],
       &gradop[grad_offset],
       &det_j[ip]
     );
 
-    if (det_j[ip] <= 0.0) {
+    if (det_j[ip] < std::numeric_limits<double>::min()) {
       *error = 1.0;
     }
-
-    grad_offset += dim*nodesPerElement_;
+    grad_offset += grad_inc;
+    geometric_grad_offset += geometric_grad_inc;
   }
-
 }
 //--------------------------------------------------------------------------
 void
@@ -1474,26 +1553,25 @@ HigherOrderQuad2DSCS::face_grad_op(
   double *error)
 {
   *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "face_grad_op is executed one element at a time for HO");
+
+  int grad_offset = 0;
+  int grad_inc = nDim_ * nodesPerElement_;
 
   const int face_offset =  nDim_ * ipsPerFace_ * nodesPerElement_ * face_ordinal;
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-    const int scalar_elem_offset = ipsPerFace_ * k;
-    const int grad_elem_offset = ipsPerFace_ * nDim_ * nodesPerElement_ * k;
+  const double* const faceShapeDerivs = &expFaceShapeDerivs_[face_offset];
 
-    for (int ip = 0; ip < ipsPerFace_; ++ip) {
-      const int grad_offset = nDim_ * nodesPerElement_ * ip;
-      const int offset = grad_offset + grad_elem_offset;
+  for (int ip = 0; ip < ipsPerFace_; ++ip) {
+    gradient(coords,
+      &faceShapeDerivs[grad_offset],
+      &gradop[grad_offset],
+      &det_j[ip] );
 
-      gradient( &coords[coord_elem_offset],
-                &expFaceShapeDerivs_[face_offset+grad_offset],
-                &gradop[offset],
-                &det_j[scalar_elem_offset+ip] );
-
-      if (det_j[ip] <= 0.0) {
-        *error = 1.0;
-      }
+    if (det_j[ip] < std::numeric_limits<double>::min()) {
+      *error = 1.0;
     }
+
+    grad_offset += grad_inc;
   }
 }
 //--------------------------------------------------------------------------
@@ -1541,6 +1619,55 @@ HigherOrderQuad2DSCS::gradient(
 
     grad[vector_offset + 0] = dn_ds1 * ds1_dx + dn_ds2 * ds2_dx;
     grad[vector_offset + 1] = dn_ds1 * ds1_dy + dn_ds2 * ds2_dy;
+  }
+}
+//--------------------------------------------------------------------------
+void
+HigherOrderQuad2DSCS::gradient(
+  const double* elemNodalCoords,
+  const double* geometricShapeDeriv,
+  const double* shapeDeriv,
+  double* grad,
+  double* det_j) const
+{
+  double dx_ds1 = 0.0;  double dx_ds2 = 0.0;
+  double dy_ds1 = 0.0;  double dy_ds2 = 0.0;
+
+  //compute Jacobian
+  int vector_offset = 0;
+  for (int node = 0; node < geometricNodesPerElement_; ++node) {
+    const double xCoord = elemNodalCoords[vector_offset + 0];
+    const double yCoord = elemNodalCoords[vector_offset + 1];
+    const double dn_ds1 = geometricShapeDeriv[vector_offset + 0];
+    const double dn_ds2 = geometricShapeDeriv[vector_offset + 1];
+
+    dx_ds1 += dn_ds1 * xCoord;
+    dx_ds2 += dn_ds2 * xCoord;
+
+    dy_ds1 += dn_ds1 * yCoord;
+    dy_ds2 += dn_ds2 * yCoord;
+
+    vector_offset += nDim_;
+  }
+
+  *det_j = dx_ds1*dy_ds2 - dy_ds1*dx_ds2;
+
+  const double inv_det_j = (*det_j > 0.0) ? 1.0 / (*det_j) : 0.0;
+
+  const double ds1_dx =  inv_det_j*dy_ds2;
+  const double ds2_dx = -inv_det_j*dy_ds1;
+
+  const double ds1_dy = -inv_det_j*dx_ds2;
+  const double ds2_dy =  inv_det_j*dx_ds1;
+
+  vector_offset = 0;
+  for (int node = 0; node < nodesPerElement_; ++node) {
+    const double dn_ds1 = shapeDeriv[vector_offset + 0];
+    const double dn_ds2 = shapeDeriv[vector_offset + 1];
+
+    grad[vector_offset + 0] = dn_ds1 * ds1_dx + dn_ds2 * ds2_dx;
+    grad[vector_offset + 1] = dn_ds1 * ds1_dy + dn_ds2 * ds2_dy;
+    vector_offset += nDim_;
   }
 }
 //--------------------------------------------------------------------------
@@ -1605,7 +1732,8 @@ void HigherOrderQuad2DSCS::gij(
   double *glowerij,
   double *deriv)
 {
-  throw std::runtime_error("Not implemented in unit test");
+
+  throw std::runtime_error("gij not implemented in unit test");
 //  SIERRA_FORTRAN(twod_gij)
 //    ( &nodesPerElement_,
 //      &numIntPoints_,
@@ -1654,27 +1782,26 @@ HigherOrderEdge2DSCS::determinant(
   double *error)
 {
   std::array<double,2> areaVector;
-
-  for (int k = 0; k < nelem; ++k) {
-    const int coord_elem_offset = nDim_ * nodesPerElement_ * k;
-
-    for (int ip = 0; ip < numIntPoints_; ++ip) {
-      const int offset = nDim_ * ip + coord_elem_offset;
-      const int grad_offset = ip * nodesPerElement_; // times edgeDim = 1
-
-      // calculate the area vector
-      area_vector( &coords[coord_elem_offset],
-                   &shapeDerivs_[grad_offset],
-                   areaVector );
-
-      // weight the area vector with the Gauss-quadrature weight for this IP
-      areav[offset + 0] = ipWeight_[ip] * areaVector[0];
-      areav[offset + 1] = ipWeight_[ip] * areaVector[1];
-    }
-  }
-
-  // check
   *error = 0.0;
+  ThrowRequireMsg(nelem == 1, "determinant is executed one element at a time for HO");
+
+  int grad_offset = 0;
+  const int grad_inc = nodesPerElement_;
+
+  int vec_offset = 0;
+  for (int ip = 0; ip < numIntPoints_; ++ip) {
+    // calculate the area vector
+    area_vector( &coords[0],
+      &shapeDerivs_[grad_offset],
+      areaVector );
+
+    // weight the area vector with the Gauss-quadrature weight for this IP
+    areav[vec_offset + 0] = ipWeight_[ip] * areaVector[0];
+    areav[vec_offset + 1] = ipWeight_[ip] * areaVector[1];
+
+    grad_offset += grad_inc;
+    vec_offset += nDim_;
+  }
 }
 //--------------------------------------------------------------------------
 void
@@ -1705,5 +1832,5 @@ HigherOrderEdge2DSCS::area_vector(
   areaVector[1] = -dxdr;
 }
 
-}  // namespace naluUnit
+}  // namespace nalu
 } // namespace sierra

@@ -109,8 +109,8 @@ int main( int argc, char ** argv )
   const bool doPromotionQuadSGL = true;
   const bool doPromotionHexGaussLegendre = true;
   const bool doPromotionHexSGL = true;
-  const bool doQuadPoissonSGL = true;
-  const bool doHexPoissonSGL = true;
+  const bool doQuadPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
+  const bool doHexPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
   const bool doRestartQuad = true;
   const bool doRestartHex = true;
 
@@ -133,37 +133,37 @@ int main( int argc, char ** argv )
   }
 
   if ( doMasterElementQuad ) {
-    for (int j = 2; j <= maxQuadOrder; ++j) {
+    for (int j = 1; j <= maxQuadOrder; ++j) {
       sierra::naluUnit::MasterElementHOTest(2, j).execute();
     }
   }
 
   if (doMasterElementHex ) {
-    for (int j = 2; j <= maxHexOrder; ++j) {
+    for (int j = 1; j <= maxHexOrder; ++j) {
       sierra::naluUnit::MasterElementHOTest(3, j).execute();
     }
   }
 
   if (doPromotionQuadGaussLegendre) {
-    for (int j = 2; j <= maxQuadOrder; ++j) {
+    for (int j = 1; j <= maxQuadOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(2, j, quadMesh, "GaussLegendre").execute();
     }
   }
 
   if (doPromotionQuadSGL) {
-    for (int j = 2; j <= maxQuadOrder; ++j) {
+    for (int j = 1; j <= maxQuadOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(2, j, quadMesh, "SGL").execute();
     }
   }
 
   if (doPromotionHexGaussLegendre) {
-    for (int j = 2; j <= maxHexOrder; ++j) {
+    for (int j = 1; j <= maxHexOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "GaussLegendre").execute();
     }
   }
 
   if (doPromotionHexSGL) {
-    for (int j = 2; j <= maxHexOrder; ++j) {
+    for (int j = 1; j <= maxHexOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "SGL").execute();
     }
   }
@@ -177,7 +177,7 @@ int main( int argc, char ** argv )
   }
 
   if (doRestartQuad)  {
-    for (int j = 2; j <= maxQuadOrder; ++j) {
+    for (int j = 1; j <= maxQuadOrder; ++j) {
       unsigned nodesPerElem = (j+1)*(j+1);
       std::string restartName = "test_output/restart/Quad" + std::to_string(nodesPerElem) + ".rs";
       std::string outputName = "test_output/restart/Quad" + std::to_string(nodesPerElem) + "_rs.e";
@@ -186,7 +186,7 @@ int main( int argc, char ** argv )
   }
 
   if (doRestartHex)  {
-    for (int j = 2; j <= maxHexOrder; ++j) {
+    for (int j = 1; j <= maxHexOrder; ++j) {
       unsigned nodesPerElem = (j+1)*(j+1)*(j+1);
       std::string restartName = "test_output/restart/Hex" + std::to_string(nodesPerElem) + ".rs";
       std::string outputName = "test_output/restart/Hex" + std::to_string(nodesPerElem) + "_rs.e";
