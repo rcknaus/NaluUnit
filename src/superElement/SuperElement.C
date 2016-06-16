@@ -675,9 +675,6 @@ SuperElement::consolidate_node_ids()
   std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterFindMap;
 
   // edge selectors; shared edges only in this part
-  /*stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_) 
-    & (metaData_->globally_shared_part() &! metaData_->locally_owned_part()); */
-
   stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_) & metaData_->globally_shared_part();
   
   stk::mesh::BucketVector const& edge_buckets =
@@ -756,8 +753,9 @@ SuperElement::consolidate_node_ids()
   std::vector<MPI_Status> recvStatus(numNeighbors);
      
   MPI_Waitall(numNeighbors, recvRequests.data(), recvStatus.data() );
+  MPI_Waitall(numNeighbors, sendRequests.data(), sendStatus.data() ); 
   
-  //bulkData_->modification_begin();
+  bulkData_->modification_begin();
 
   for ( iterM = edgeNodeSharingOffProcMap_.begin(); iterM != edgeNodeSharingOffProcMap_.end(); ++iterM ) {
     const int originProc = iterM->first;
@@ -771,7 +769,9 @@ SuperElement::consolidate_node_ids()
         stk::mesh::Entity foundNode = iterFindMap->second[localIndex];
         stk::mesh::EntityId foundNodeId = bulkData_->identifier(foundNode);
         stk::mesh::EntityId minId = std::min(foundNodeId, theId);
-        //bulkData_->change_entity_id(minId,foundNode);
+        if ( foundNodeId != minId ) {
+          bulkData_->change_entity_id(minId,foundNode);
+        }
       }
       else {
         throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
@@ -779,26 +779,47 @@ SuperElement::consolidate_node_ids()
     }
   }
 
-  //bulkData_->modification_end();
+  bulkData_->modification_end();
 
-  // last line
-  MPI_Waitall(numNeighbors, sendRequests.data(), sendStatus.data() ); 
-
+ 
   // check
   const bool parallelCheck = false;
   const bool sendItOut = false;
   if ( parallelCheck ) {
-    std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterM;
-    for ( iterM = parentEdgeNodesMap_.begin(); iterM != parentEdgeNodesMap_.end(); ++iterM ) {
-      stk::mesh::EntityId edgeId = iterM->first;
-      std::vector<stk::mesh::Entity> edgeNodesVec = iterM->second;
-      if ( sendItOut )
-        NaluEnv::self().naluOutput() << "edge Id: " << edgeId << std::endl;
-      for ( size_t iNode = 0; iNode < edgeNodesVec.size(); ++iNode) {
-        stk::mesh::EntityId nodeId = bulkData_->identifier(edgeNodesVec[iNode]);
+
+    stk::mesh::Selector s_all_edge = stk::mesh::Selector(*originalPart_);
+  
+    stk::mesh::BucketVector const& all_edge_buckets =
+      bulkData_->get_buckets(stk::topology::EDGE_RANK, s_all_edge );
+    for ( stk::mesh::BucketVector::const_iterator ib = all_edge_buckets.begin();
+          ib != all_edge_buckets.end() ; ++ib ) {
+      stk::mesh::Bucket & b = **ib ;
+      const stk::mesh::Bucket::size_type length   = b.size();
+      
+      for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
+        
+        // get edge and edge id
+        stk::mesh::Entity edge = b[k];
+        const stk::mesh::EntityId edgeId = bulkData_->identifier(edge);
+        
+        // find the super node off the edge
+        std::vector<stk::mesh::Entity> edgeNodesVec;
+        iterFindMap = parentEdgeNodesMap_.find(edgeId);
+        if ( iterFindMap != parentEdgeNodesMap_.end() ) {
+          edgeNodesVec = iterFindMap->second;
+        }
+        else {
+          throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
+        }
+        
         if ( sendItOut )
-          NaluEnv::self().naluOutput() << "node id: " << nodeId << std::endl;
-      } 
+          NaluEnv::self().naluOutput() << "edge Id: " << edgeId << std::endl;
+        for ( size_t iNode = 0; iNode < edgeNodesVec.size(); ++iNode) {
+          stk::mesh::EntityId nodeId = bulkData_->identifier(edgeNodesVec[iNode]);
+          if ( sendItOut )
+            NaluEnv::self().naluOutput() << "node id: " << nodeId << std::endl;
+        } 
+      }
     }
   }
 }
