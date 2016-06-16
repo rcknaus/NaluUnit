@@ -41,6 +41,9 @@
 #include <vector>
 #include <stdexcept>
 
+// mpi; for node id consolidation algorithm
+#include <mpi.h>
+
 namespace sierra{
 namespace naluUnit{
 
@@ -156,7 +159,7 @@ SuperElement::execute()
   create_nodes();
   
   // for edges that have multiple processor owners, consolidate ids
-  consolidate_edge_node_ids_at_boundaries();
+  consolidate_node_ids();
   
   // create the element
   create_elements();
@@ -311,9 +314,6 @@ SuperElement::delete_edges()
       if ( !successfullyDestroyed )
         throw std::runtime_error("destroy did not happen");
     }
-    else {
-      throw std::runtime_error("check on locally owned for deletion");
-    }
   }  
   bulkData_->modification_end();
   
@@ -343,6 +343,15 @@ SuperElement::delete_edges()
     numberOfEdgesInEdgePart += length; 
   }
   
+  // parallel sum
+  size_t l_sum[2] = {numberOfEdgesInOriginalPart, numberOfEdgesInEdgePart};
+  size_t g_sum[2] = {};
+  stk::ParallelMachine comm = NaluEnv::self().parallel_comm();
+  stk::all_reduce_sum(comm, l_sum, g_sum, 2);
+  // reassign
+  numberOfEdgesInOriginalPart = g_sum[0];
+  numberOfEdgesInEdgePart = g_sum[1];
+
   // there should be two removed from the edge part (zero left); 
   // there should be eight remaining in the original part
   const bool testEdgesInOrigPart = numberOfEdgesInOriginalPart == 8 ? true : false;
@@ -553,8 +562,10 @@ SuperElement::create_nodes()
       for ( int j = 0; j < nDim_; ++j )
         edgeCoordsC[j] = (edgeCoordsL[j] + edgeCoordsR[j])*0.5;
       
-      // store off map
-      parentEdgeNodesMap_[edgeId] = nodeC;
+      // store off map; for now, only one node per edge (P=2)
+      std::vector<stk::mesh::Entity> edgeNodesVec;
+      edgeNodesVec.push_back(nodeC);
+      parentEdgeNodesMap_[edgeId] = edgeNodesVec;
       
       ++promotedNodesVecCount;
     }
@@ -580,8 +591,9 @@ SuperElement::create_nodes()
       stk::mesh::Entity const * face_node_rels =  bulkData_->begin_nodes(face);
       const int numNodes = b.num_nodes(k);
 
-      // extract element center node
+      // extract element center node; FIXME: P=2
       stk::mesh::Entity nodeC = promotedNodesVec_[promotedNodesVecCount];
+
       double * elemCoordsC = stk::mesh::field_data(*coordinates_, nodeC);
     
       // hacked center coords calulation
@@ -595,8 +607,11 @@ SuperElement::create_nodes()
       
       for ( int i = 0; i < nDim_; ++i )
         elemCoordsC[i] = tmpCoord[i];
-      
-      parentFaceNodesMap_[faceId] = nodeC;
+
+      // FIXME: P=2
+      std::vector<stk::mesh::Entity> faceNodesVec;
+      faceNodesVec.push_back(nodeC);      
+      parentFaceNodesMap_[faceId] = faceNodesVec;
       
       ++promotedNodesVecCount;
     }
@@ -640,8 +655,10 @@ SuperElement::create_nodes()
       
       for ( int i = 0; i < nDim_; ++i )
         elemCoordsC[i] = tmpCoord[i];
-      
-      parentElemNodesMap_[elemId] = nodeC;
+
+      std::vector<stk::mesh::Entity> elemNodesVec;
+      elemNodesVec.push_back(nodeC);
+      parentElemNodesMap_[elemId] = elemNodesVec;
       
       ++promotedNodesVecCount;
     }  
@@ -649,12 +666,141 @@ SuperElement::create_nodes()
 }
 
 //--------------------------------------------------------------------------
-//-------- consolidate_edge_node_ids_at_boundaries ------------------------
+//-------- consolidate_node_ids --------------------------------------------
 //--------------------------------------------------------------------------
 void
-SuperElement::consolidate_edge_node_ids_at_boundaries()
+SuperElement::consolidate_node_ids()
 {
-  // nothing
+  // generic iterator for parentNodesMap_
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterFindMap;
+
+  // edge selectors; shared edges only in this part
+  /*stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_) 
+    & (metaData_->globally_shared_part() &! metaData_->locally_owned_part()); */
+
+  stk::mesh::Selector s_edge = stk::mesh::Selector(*originalPart_) & metaData_->globally_shared_part();
+  
+  stk::mesh::BucketVector const& edge_buckets =
+    bulkData_->get_buckets(stk::topology::EDGE_RANK, s_edge );
+  for ( stk::mesh::BucketVector::const_iterator ib = edge_buckets.begin();
+        ib != edge_buckets.end() ; ++ib ) {
+    stk::mesh::Bucket & b = **ib ;
+    const stk::mesh::Bucket::size_type length   = b.size();
+    
+    for ( stk::mesh::Bucket::size_type k = 0 ; k < length ; ++k ) {           
+      
+      // get edge and edge id
+      stk::mesh::Entity edge = b[k];
+      const stk::mesh::EntityId edgeId = bulkData_->identifier(edge);
+
+      // find the super node off the edge
+      std::vector<stk::mesh::Entity> edgeNodesVec;
+      iterFindMap = parentEdgeNodesMap_.find(edgeId);
+      if ( iterFindMap != parentEdgeNodesMap_.end() ) {
+        edgeNodesVec = iterFindMap->second;
+      }
+      else {
+        throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
+      }
+     
+      // determine how many procs touch this edge
+      stk::mesh::EntityKey key = bulkData_->entity_key(edge);
+      std::vector<int> procs; // should be at least one in size..
+      bulkData_->comm_procs(key, procs);
+
+      // create the struct, fill in the data and push back
+      for ( size_t iProc = 0; iProc < procs.size(); ++iProc ) {
+        for ( size_t iNode = 0; iNode < edgeNodesVec.size(); ++iNode ) {
+          EntityNodeSharing enShare;
+          enShare.edgeId_ = edgeId;
+          enShare.globalNodeId_ = bulkData_->identifier(edgeNodesVec[iNode]);
+          enShare.localIndex_ = iNode;
+          edgeNodeSharingMap_[procs[iProc]].push_back(enShare);
+        }
+      }
+    }
+  }
+   
+  // setup
+  int numNeighbors = edgeNodeSharingMap_.size();
+  std::vector<MPI_Request> sendRequests(numNeighbors);
+  std::vector<MPI_Request> recvRequests(numNeighbors);
+
+  // find the size of a struct
+  EntityNodeSharing enScratch;
+  const int sizeofENS = sizeof(enScratch);
+  
+  int counter = 0;
+  std::map<int, std::vector<EntityNodeSharing> >::const_iterator iterM;
+  for ( iterM = edgeNodeSharingMap_.begin(); iterM != edgeNodeSharingMap_.end(); ++iterM ) {
+    const int senderProc = iterM->first;
+    const std::vector<EntityNodeSharing> sendVec = iterM->second;
+    const int buffSize  = sendVec.size()*sizeofENS;
+    edgeNodeSharingOffProcMap_[senderProc].resize(sendVec.size());
+    MPI_Irecv(edgeNodeSharingOffProcMap_[senderProc].data(), buffSize, MPI_BYTE, senderProc,
+              MPI_ANY_TAG, NaluEnv::self().parallel_comm(), &recvRequests[counter]);
+    counter++;
+  }
+  
+  counter = 0;
+  for ( iterM = edgeNodeSharingMap_.begin(); iterM != edgeNodeSharingMap_.end(); ++iterM ) {
+    const int destProc = iterM->first;
+    const std::vector<EntityNodeSharing> sendVec = iterM->second;
+    const int buffSize  = sendVec.size()*sizeofENS;
+    const int whatTagIsThis = 0;
+    MPI_Isend(sendVec.data(), buffSize, MPI_BYTE, destProc, whatTagIsThis, NaluEnv::self().parallel_comm(), &sendRequests[counter]);
+    counter++;
+  }
+  
+  std::vector<MPI_Status> sendStatus(numNeighbors);
+  std::vector<MPI_Status> recvStatus(numNeighbors);
+     
+  MPI_Waitall(numNeighbors, recvRequests.data(), recvStatus.data() );
+  
+  //bulkData_->modification_begin();
+
+  for ( iterM = edgeNodeSharingOffProcMap_.begin(); iterM != edgeNodeSharingOffProcMap_.end(); ++iterM ) {
+    const int originProc = iterM->first;
+    const std::vector<EntityNodeSharing> receiveBuffer = iterM->second;
+    for ( size_t k = 0; k < receiveBuffer.size(); ++k) {
+      stk::mesh::EntityId theId = receiveBuffer[k].globalNodeId_;
+      stk::mesh::EntityId edgeId = receiveBuffer[k].edgeId_;
+      int localIndex = receiveBuffer[k].localIndex_;
+      iterFindMap = parentEdgeNodesMap_.find(edgeId);
+      if ( iterFindMap != parentEdgeNodesMap_.end() ) {
+        stk::mesh::Entity foundNode = iterFindMap->second[localIndex];
+        stk::mesh::EntityId foundNodeId = bulkData_->identifier(foundNode);
+        stk::mesh::EntityId minId = std::min(foundNodeId, theId);
+        //bulkData_->change_entity_id(minId,foundNode);
+      }
+      else {
+        throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
+      } 
+    }
+  }
+
+  //bulkData_->modification_end();
+
+  // last line
+  MPI_Waitall(numNeighbors, sendRequests.data(), sendStatus.data() ); 
+
+  // check
+  const bool parallelCheck = false;
+  const bool sendItOut = false;
+  if ( parallelCheck ) {
+    std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterM;
+    for ( iterM = parentEdgeNodesMap_.begin(); iterM != parentEdgeNodesMap_.end(); ++iterM ) {
+      stk::mesh::EntityId edgeId = iterM->first;
+      std::vector<stk::mesh::Entity> edgeNodesVec = iterM->second;
+      if ( sendItOut )
+        NaluEnv::self().naluOutput() << "edge Id: " << edgeId << std::endl;
+      for ( size_t iNode = 0; iNode < edgeNodesVec.size(); ++iNode) {
+        stk::mesh::EntityId nodeId = bulkData_->identifier(edgeNodesVec[iNode]);
+        if ( sendItOut )
+          NaluEnv::self().naluOutput() << "node id: " << nodeId << std::endl;
+      } 
+    }
+  }
 }
   
 //--------------------------------------------------------------------------
@@ -663,7 +809,6 @@ SuperElement::consolidate_edge_node_ids_at_boundaries()
 void
 SuperElement::create_elements()
 {
-
   // define some common selectors; want locally owned here
   stk::mesh::Selector s_elem = metaData_->locally_owned_part()
     & stk::mesh::Selector(*originalPart_);
@@ -678,9 +823,8 @@ SuperElement::create_elements()
   stk::mesh::EntityIdVector availableElemIds(numberOfElements_);
   bulkData_->generate_new_ids(stk::topology::ELEM_RANK, numberOfElements_, availableElemIds);
 
-  // generic iterator for parentNodesMap_ and placeholder for the found node
-  std::map<stk::mesh::EntityId, stk::mesh::Entity>::iterator iterFindMap;
-  stk::mesh::Entity foundNode;
+  // generic iterator for parentNodesMap_
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterFindMap;
   
   // declare id counter
   size_t availableElemIdCounter = 0;
@@ -720,26 +864,30 @@ SuperElement::create_elements()
         
         // find the edge centroid node(s)
         iterFindMap = parentEdgeNodesMap_.find(edgeId);
+        std::vector<stk::mesh::Entity> edgeNodesVec;
         if ( iterFindMap != parentEdgeNodesMap_.end() ) {
-          foundNode = iterFindMap->second;
+          edgeNodesVec = iterFindMap->second;
         }
         else {
           throw std::runtime_error("Could not find the node beloging to edge vector");
         }
-        connectedNodesIdVec.push_back(bulkData_->identifier(foundNode));
+        for ( size_t iNode = 0; iNode < edgeNodesVec.size(); ++iNode )
+          connectedNodesIdVec.push_back(bulkData_->identifier(edgeNodesVec[iNode]));
       }
-            
-      // third, nodes in the center of the element faces
-      
+                  
       // last, nodes in the center of the element; find the element centroid node(s)
       iterFindMap = parentElemNodesMap_.find(elemId);
+      std::vector<stk::mesh::Entity> elemNodesVec;
       if ( iterFindMap != parentElemNodesMap_.end() ) {
-        foundNode = iterFindMap->second;
+        elemNodesVec = iterFindMap->second;
       }
       else {
         throw std::runtime_error("Could not find the node beloging to element vector");
       }
-      connectedNodesIdVec.push_back(bulkData_->identifier(foundNode));
+      
+      // FIXME: assumes P=1
+      for (size_t iNode = 0; iNode < elemNodesVec.size(); ++iNode)
+        connectedNodesIdVec.push_back(bulkData_->identifier(elemNodesVec[iNode]));
       
       // all done with element, edge and face node connectivitoes; create the element
       stk::mesh::Entity theElem
@@ -765,10 +913,9 @@ SuperElement::create_elements_surface()
   // find total number of locally owned elements
   size_t numNewSurfaceElem = 0;
 
-  // generic iterator for parentNodesMap_ and placeholder for the found node
-  std::map<stk::mesh::EntityId, stk::mesh::Entity>::iterator iterFindMap;
+  // generic iterator for parentNodesMap_ and placeholder for the found element
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> >::iterator iterFindMap;
   stk::mesh::Entity foundElem;
-  stk::mesh::Entity foundNode;
   
   // define vector of parent topos; should always be UNITY in size
   std::vector<stk::topology> parentTopo;
@@ -833,9 +980,10 @@ SuperElement::create_elements_surface()
                                     *superSurfacePart_);
       
       // find the super element
-      iterFindMap = superElementElemMap_.find(elemId);
-      if ( iterFindMap != superElementElemMap_.end() ) {
-        foundElem = iterFindMap->second;
+      std::map<stk::mesh::EntityId, stk::mesh::Entity>::iterator iterFindElem;
+      iterFindElem = superElementElemMap_.find(elemId);
+      if ( iterFindElem != superElementElemMap_.end() ) {
+        foundElem = iterFindElem->second;
       }
       else {
         throw std::runtime_error("Could not find the super element beloging to low order element id: " + elemId );
@@ -853,9 +1001,6 @@ SuperElement::create_elements_surface()
         localNodeCount++;
       }
       
-      // now edges off of face      
-      std::vector<stk::mesh::Entity> foundEdgeNodes;
-
       // find the connected edges to this face
       stk::mesh::Entity const* face_edge_rels = bulkData_->begin_edges(face);
 
@@ -869,36 +1014,37 @@ SuperElement::create_elements_surface()
 	const stk::mesh::EntityId edgeId = (nDim_ == 3) ? bulkData_->identifier(face_edge_rels[i]) : faceId;
 
         // find the super node off the edge
+        std::vector<stk::mesh::Entity> edgeNodesVec;
         iterFindMap = parentEdgeNodesMap_.find(edgeId);
         if ( iterFindMap != parentEdgeNodesMap_.end() ) {
-          foundEdgeNodes.push_back(iterFindMap->second);
+          edgeNodesVec = iterFindMap->second;
         }
         else {
           throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + edgeId );
         }
         
         // add nodes on each edge relation
-        for ( size_t j = 0; j < foundEdgeNodes.size(); ++j) {
-          bulkData_->declare_relation(superFace, foundEdgeNodes[j], localNodeCount);
+        for ( size_t j = 0; j < edgeNodesVec.size(); ++j) {
+          bulkData_->declare_relation(superFace, edgeNodesVec[j], localNodeCount);
           localNodeCount++;
         }
       }
 
       // now faces
       if ( nDim_ == 3 ) {  
-        std::vector<stk::mesh::Entity> foundFaceNodes;
+        std::vector<stk::mesh::Entity> faceNodesVec;
         // find the super node off the face
         iterFindMap = parentFaceNodesMap_.find(faceId);
         if ( iterFindMap != parentFaceNodesMap_.end() ) {
-          foundFaceNodes.push_back(iterFindMap->second);
+          faceNodesVec = iterFindMap->second;
         }
         else {
           throw std::runtime_error("Could not find the node(s) beloging to low order edge id: " + faceId );
         }     
       
         // add final set of relations
-        for ( size_t j = 0; j < foundFaceNodes.size(); ++j) {
-          bulkData_->declare_relation(superFace, foundFaceNodes[j], localNodeCount);
+        for ( size_t j = 0; j < faceNodesVec.size(); ++j) {
+          bulkData_->declare_relation(superFace, faceNodesVec[j], localNodeCount);
           localNodeCount++;
         }
       }

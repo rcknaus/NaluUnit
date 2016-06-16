@@ -44,11 +44,11 @@ namespace stk {
 namespace sierra {
 namespace naluUnit {
 
-struct EdgeNodeSharing {
+struct EntityNodeSharing {
 public:
   stk::mesh::EntityId edgeId_;
   stk::mesh::EntityId globalNodeId_;
-  int localNodeId_;
+  int localIndex_;
 };
 
 class SuperElement
@@ -76,7 +76,7 @@ public:
 
   void create_nodes();
 
-  void consolidate_edge_node_ids_at_boundaries();
+  void consolidate_node_ids();
   
   void create_elements();
   void create_elements_surface();
@@ -164,9 +164,9 @@ public:
   std::vector<stk::mesh::Entity> promotedNodesVec_;
 
   // create mapping of parent ids nodes to the new node
-  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentEdgeNodesMap_;
-  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentFaceNodesMap_;
-  std::map<stk::mesh::EntityId, stk::mesh::Entity > parentElemNodesMap_;
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> > parentEdgeNodesMap_;
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> > parentFaceNodesMap_;
+  std::map<stk::mesh::EntityId, std::vector<stk::mesh::Entity> > parentElemNodesMap_;
   
   // mapping of low order element id to the new higher order element
   std::map<stk::mesh::EntityId, stk::mesh::Entity > superElementElemMap_;
@@ -175,7 +175,8 @@ public:
   std::vector<std::vector<int> > sharedProcsEdge_;
 
   // communication patter for edge-nodes
-  std::vector<EdgeNodeSharing> edgeNodeSharingVec_;
+  std::map<int, std::vector<EntityNodeSharing> > edgeNodeSharingMap_;
+  std::map<int, std::vector<EntityNodeSharing> > edgeNodeSharingOffProcMap_;
 };
 
 } // namespace naluUnit
