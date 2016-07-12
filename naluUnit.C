@@ -13,6 +13,7 @@
 #include <element_promotion/MasterElementHOTest.h>
 #include <element_promotion/PromoteElementRestartTest.h>
 #include <element_promotion/HighOrderPoissonTest.h>
+#include <element_promotion/TensorProductPoissonTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -111,11 +112,14 @@ int main( int argc, char ** argv )
   const bool doPromotionHexSGL = true;
   const bool doQuadPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
   const bool doHexPoissonSGL = true && naluEnv.parallel_size() == 1; // serial test
+  const bool doQuadTensorProductPoisson = true && naluEnv.parallel_size() == 1; //serial test
   const bool doRestartQuad = true;
   const bool doRestartHex = true;
 
   const int maxQuadOrder = 5;
   const int maxHexOrder = 5;
+
+  const bool printTimingInfo = true;
 
   // The dual nodal volume test assumes a uniform mesh
   // The projected nodal gradient test should always work
@@ -166,6 +170,10 @@ int main( int argc, char ** argv )
     for (int j = 1; j <= maxHexOrder; ++j) {
       sierra::naluUnit::PromoteElementTest(3, j, hexMesh, "SGL").execute();
     }
+  }
+
+  if ( doQuadTensorProductPoisson ) {
+    sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", printTimingInfo).execute();
   }
 
   if ( doQuadPoissonSGL  ) {
