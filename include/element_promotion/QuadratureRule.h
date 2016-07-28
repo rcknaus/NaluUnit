@@ -8,7 +8,6 @@
 #define QuadratureRule_h
 
 #include <vector>
-#include <Teuchos_SerialDenseVector.hpp>
 
 namespace sierra{
 namespace naluUnit{

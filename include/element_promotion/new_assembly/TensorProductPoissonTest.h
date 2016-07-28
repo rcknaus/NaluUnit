@@ -56,39 +56,31 @@ class TensorProductPoissonTest
 {
 public:
   // constructor/destructor
- TensorProductPoissonTest(std::string meshName = "test_meshes/tquad4_4.g", bool printTiming = true);
+ TensorProductPoissonTest(
+   std::string meshName = "test_meshes/tquad4_4.g",
+   int order = 10,
+   bool printTiming = true);
  ~TensorProductPoissonTest();
 
   void execute();
-
+private:
   void setup_mesh();
-
   void register_fields();
-
   void set_output_fields();
-
   void output_results();
-
   void initialize_fields();
-
   void output_banner();
-
   void setup_super_parts();
-
   void perturb_coordinates(double elem_size, double fac);
-
   void solve_poisson();
-
-  std::unique_ptr<MasterElement>
-  make_master_volume_element(const ElementDescription& elem);
-
-  std::unique_ptr<MasterElement>
-  make_master_subcontrol_surface_element(const ElementDescription& elem);
-
-  std::unique_ptr<MasterElement>
-  make_master_boundary_element(const ElementDescription& elem);
-
   bool check_solution();
+  void initialize_matrix();
+  void assemble_poisson(unsigned pOrder);
+  template<unsigned poly_order> void assemble_poisson();
+  void sum_into_global(const size_t* indices, double* lhs_local, double* rhs_local, int length);
+  void apply_dirichlet();
+  void solve_matrix_equation();
+  void update_field();
 
   const std::string meshName_;
   const int order_;
@@ -118,6 +110,7 @@ public:
   VectorFieldType* coordinates_;
   ScalarFieldType* q_;
   ScalarFieldType* qExact_;
+  ScalarFieldType* source_;
 
   // part vectors
   stk::mesh::PartVector originalPartVector_;
@@ -128,17 +121,6 @@ public:
   Teuchos::SerialDenseVector<int,double> rhs_;
   Teuchos::SerialDenseVector<int,double> delta_;
   std::map<stk::mesh::Entity, size_t> rowMap_;
-  std::unique_ptr<MasterElement> meSCS_;
-  std::unique_ptr<MasterElement> meSCV_;
-
-
-private:
-  void initialize_matrix();
-  template<unsigned pOrder> void assemble_poisson();
-  void sum_into_global(const size_t* indices, double* lhs_local, double* rhs_local, int length);
-  void apply_dirichlet();
-  void solve_matrix_equation();
-  void update_field();
 };
 
 } // namespace naluUnit

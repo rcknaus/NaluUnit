@@ -174,7 +174,7 @@ gauss_lobatto_legendre_rule(
   double xright)
 {
   /*
-   * Returns a pair of abscissae and weights for the usual Gauss-Legendre
+   * Returns a pair of abscissae and weights for the usual Gauss-Lobatto-Legendre
    * quadrature rule.
    *
    * Based on the modified Golub-Welsch algorithm.  Implementation is based on the

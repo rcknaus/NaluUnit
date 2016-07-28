@@ -13,7 +13,7 @@
 #include <element_promotion/MasterElementHOTest.h>
 #include <element_promotion/PromoteElementRestartTest.h>
 #include <element_promotion/HighOrderPoissonTest.h>
-#include <element_promotion/TensorProductPoissonTest.h>
+#include <element_promotion/new_assembly/TensorProductPoissonTest.h>
 #include <mpi.h>
 #include <overset/Overset.h>
 #include <surfaceFields/SurfaceFields.h>
@@ -119,8 +119,6 @@ int main( int argc, char ** argv )
   const int maxQuadOrder = 5;
   const int maxHexOrder = 5;
 
-  const bool printTimingInfo = true;
-
   // The dual nodal volume test assumes a uniform mesh
   // The projected nodal gradient test should always work
   // The node count test assumes a uniform mesh with a square/cubic domain on every core
@@ -173,7 +171,9 @@ int main( int argc, char ** argv )
   }
 
   if ( doQuadTensorProductPoisson ) {
-    sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", printTimingInfo).execute();
+    int polyOrder = 10;
+    bool printTiming = true;
+    sierra::naluUnit::TensorProductPoissonTest("test_meshes/tquad4_4.g", polyOrder, printTiming).execute();
   }
 
   if ( doQuadPoissonSGL  ) {

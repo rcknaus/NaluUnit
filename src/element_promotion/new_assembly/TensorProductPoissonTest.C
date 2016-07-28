@@ -4,13 +4,14 @@
 /*  in the file, LICENSE, which is located in the top-level NaluUnit      */
 /*  directory structure                                                   */
 /*------------------------------------------------------------------------*/
-#include <element_promotion/TensorProductPoissonTest.h>
+#include <element_promotion/new_assembly/TensorProductPoissonTest.h>
 
 #include <NaluEnv.h>
 #include <element_promotion/ElementDescription.h>
 #include <element_promotion/MasterElement.h>
 #include <element_promotion/MasterElementHO.h>
-#include <element_promotion/HigherOrderLaplacianQuad.h>
+#include <element_promotion/new_assembly/HighOrderLaplacianQuad.h>
+#include <element_promotion/new_assembly/HighOrderGeometry.h>
 #include <element_promotion/PromoteElement.h>
 #include <element_promotion/PromotedPartHelper.h>
 #include <element_promotion/PromotedElementIO.h>
@@ -18,6 +19,7 @@
 #include <Teuchos_LAPACK.hpp>
 #include <Teuchos_SerialDenseMatrix.hpp>
 #include <TestHelper.h>
+#include <KokkosInterface.h>
 
 #include <stk_io/StkMeshIoBroker.hpp>
 #include <stk_mesh/base/Field.hpp>
@@ -35,6 +37,8 @@
 #include <stk_topology/topology.hpp>
 #include <stk_util/environment/ReportHandler.hpp>
 #include <stk_util/parallel/Parallel.hpp>
+#include <stk_util/environment/CPUTime.hpp>
+#include <stk_util/environment/perf_util.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -42,6 +46,7 @@
 #include <random>
 #include <utility>
 #include <limits>
+#include <stdexcept>
 
 namespace sierra{
 namespace naluUnit{
@@ -52,11 +57,12 @@ namespace naluUnit{
 //TensorProductPoissonTest - Use a four high-order elements to solve
 // the "heat conduction MMS" to effectively floating point precision
 //==========================================================================
-
-#define POLY_ORDER 10
-TensorProductPoissonTest::TensorProductPoissonTest(std::string meshName, bool printTiming)
+TensorProductPoissonTest::TensorProductPoissonTest(
+  std::string meshName,
+  int order,
+  bool printTiming)
   : meshName_(std::move(meshName)),
-    order_(10),
+    order_(order),
     outputTiming_(true),
     timeMainLoop_(0.0),
     timeMetric_(0.0),
@@ -92,217 +98,184 @@ TensorProductPoissonTest::execute()
   initialize_matrix();
   timeSetup += MPI_Wtime();
 
+  // number of runs for averaging timing data
   double timeAssembly = -MPI_Wtime();
-  assemble_poisson<10>();
+  unsigned numRuns = outputTiming_ ? 1000 : 1;
+  for (unsigned j = 0; j < numRuns; ++j) {
+    lhs_.putScalar(0.0);
+    rhs_.putScalar(0.0);
+    assemble_poisson(order_);
+  }
   timeAssembly += MPI_Wtime();
 
-  double timeSolver = -MPI_Wtime();
+  double timeSolveAndUpdate = -MPI_Wtime();
   apply_dirichlet();
   solve_matrix_equation();
-  timeSolver += MPI_Wtime();
-
-  double timeUpdate = -MPI_Wtime();
   update_field();
-  timeUpdate += MPI_Wtime();
+  timeSolveAndUpdate += MPI_Wtime();
 
   totalTime += MPI_Wtime();
 
   if (outputTiming_) {
-    NaluEnv::self().naluOutputP0() << "Time to setup: "
-        << timeSetup << std::endl;
+    // average time
+    timeMainLoop_ /= countAssemblies_;
+    timeMetric_ /= countAssemblies_;
+    timeLHS_ /= countAssemblies_;
+    timeResidual_ /= countAssemblies_;
+    timeGather_ /= countAssemblies_;
+    timeVolumeMetric_ /= countAssemblies_;
+    timeVolumeSource_ /= countAssemblies_;
 
-    NaluEnv::self().naluOutputP0() << "Time to assemble global matrix: "
-        << timeAssembly << std::endl;
+    static const int NUM_TIMERS = 11;
+    const double timers[NUM_TIMERS] = {
+        timeSetup, timeAssembly,
+        timeMainLoop_, timeGather_,
+        timeMetric_, timeLHS_,
+        timeVolumeMetric_, timeVolumeSource_,
+        timeResidual_, timeSolveAndUpdate,  totalTime
+    };
+    const char* timer_names[NUM_TIMERS] = {
+        "setup", "matrix assembly (run 1000 times)",
+        "avg. element assembly", "avg. gather",
+        "avg. surface metric computation", "avg. lhs assembly",
+        "avg. volume metric computation", "avg. volumetric source computation",
+        "avg. residual evaluation", "solve and update",
+        "Total"
+    };
 
-    NaluEnv::self().naluOutputP0() << "    -- Avg. Total element assembly: "
-        << timeMainLoop_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. Gather: "
-        << timeGather_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. Metric computation: "
-        << timeMetric_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. LHS computation: "
-        << timeLHS_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. Metric volume computation: "
-        << timeVolumeMetric_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. Volumetric source computation: "
-        << timeVolumeSource_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "        -- Avg. Residual computation: "
-        << timeResidual_ << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "Time to solve global matrix equation: "
-        << timeSolver << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "Time to update solution: "
-        << timeUpdate << std::endl;
-
-    NaluEnv::self().naluOutputP0() << "Total time for test: "
-        << totalTime << std::endl;
-
+    stk::print_timers(&timers[0], &timer_names[0], NUM_TIMERS);
   }
   output_results();
 }
 //--------------------------------------------------------------------------
 struct MMSFunction {
-  MMSFunction(int in_dim) : dim(in_dim), k(1.0), pi(std::acos(-1.0)) {};
+  MMSFunction() : k(1.0), pi(std::acos(-1.0)) {};
 
-  double value(const double* pos) const
+  double exact_solution(double x, double y) {
+    return (0.25*(std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y)));
+  }
+
+  double exact_laplacian(double x, double y) const
   {
-    double x = pos[0];
-    double y = pos[1];
-    double val = 0.0;
-    if (dim == 2) {
-      val = 0.25*(std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y));
-    }
-    else {
-      double z = pos[2];
-      val = 0.25*(std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y) + std::cos(2.0*k*pi*z));
-    }
-    return val;
+    return ( -(k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y)) );
   };
 
-  double exact_laplacian(const double* pos) const
-  {
-    double x = pos[0];
-    double y = pos[1];
-    double source = 0.0;
-    if (dim == 2) {
-     source = -(k*pi)*(k*pi) * (std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y));
-    }
-    else {
-      double z = pos[2];
-      source = -(k*pi)*(k*pi) * (
-          std::cos(2.0*k*pi*x) + std::cos(2.0*k*pi*y) + std::cos(2.0*k*pi*z)
-      );
-    }
-    return source;
-  };
-
-  const int dim;
   double k;
   double pi;
 };
 //--------------------------------------------------------------------------
-template <unsigned pOrder> void
+void
+TensorProductPoissonTest::assemble_poisson(unsigned pOrder)
+{
+  switch (pOrder)
+  {
+    case  1: assemble_poisson< 1>(); break;
+    case  2: assemble_poisson< 2>(); break;
+    case  3: assemble_poisson< 3>(); break;
+    case  4: assemble_poisson< 4>(); break;
+    case  5: assemble_poisson< 5>(); break;
+    case  6: assemble_poisson< 6>(); break;
+    case  7: assemble_poisson< 7>(); break;
+    case  8: assemble_poisson< 8>(); break;
+    case  9: assemble_poisson< 9>(); break;
+    case 10: assemble_poisson<10>(); break;
+    case 15: assemble_poisson<15>(); break;
+    default: throw std::runtime_error("Sorry, order " + std::to_string(pOrder) + " is not supported");
+  }
+}
+//--------------------------------------------------------------------------
+template <unsigned poly_order> void
 TensorProductPoissonTest::assemble_poisson()
 {
   // Poisson equation assembly algorithm for quadrilateral elements
+
+  // definitions
   constexpr unsigned dim = 2;
+  constexpr unsigned nodes1D = poly_order+1;
+  constexpr unsigned nodesPerElement = (poly_order+1)*(poly_order+1);
 
-  // set-up
-  constexpr int nodesPerElement = (pOrder+1)*(pOrder+1);
-  constexpr int lhsSize = nodesPerElement * nodesPerElement;
+  // Operations for assembly
+  auto laplaceOps = HighOrderLaplacianQuad<poly_order>();
+  auto geomOps = HighOrderGeometryQuad<poly_order>();
 
-  // Operations
-  auto func = MMSFunction(dim);
-  auto laplaceOps = HigherOrderLaplacianQuad<pOrder>(*elem_);
-  auto meSCS = HigherOrderQuad2DSCS(*elem_);
+  // scratch
+  typename QuadViews<poly_order>::matrix_array       lhs("left-hand side");
+  typename QuadViews<poly_order>::nodal_scalar_array rhs("right-hand side");
+  typename QuadViews<poly_order>::scs_tensor_array   metric_laplace("grid metric for laplacian");
+  typename QuadViews<poly_order>::nodal_vector_array coordinates("element nodal coordinates");
+  typename QuadViews<poly_order>::nodal_scalar_array metric_vol("Det(J) evaluated at the nodes");
+  typename QuadViews<poly_order>::nodal_scalar_array scalar("scalar field data");
+  typename QuadViews<poly_order>::nodal_scalar_array nodalSource("nodal source field");
 
-  std::vector<double> lhs(lhsSize, 0.0);
-  std::vector<double> rhs(nodesPerElement,0.0);
+  // map from default node-ordering to tensor product node-ordering
+  const std::vector<unsigned>& nodeMap = elem_->nodeMap;
 
-  // scratch arrays
-  std::array<size_t, nodesPerElement> indices{};
-  std::array<double, nodesPerElement> scalar_field_data{};
-  std::array<double, nodesPerElement*dim> coordinates{};
-  std::array<double, nodesPerElement> nodalSource{};
-  std::array<std::array<double, pOrder*(pOrder+1)>,4> metric_laplace{{}};
-  std::array<double, nodesPerElement> metric_vol{};
+  const auto& buckets =
+      bulkData_->get_buckets(stk::topology::ELEMENT_RANK, stk::mesh::selectUnion(superPartVector_));
 
-  const auto& nodeMap = elem_->nodeMap;
-
-  ThrowRequireMsg(elem_->useReducedGeometricBasis, "Only subparametric mapping for now");
-  const double* const geomR = &meSCS.geometricShapeDerivs_[0];
-  const double* const geomS = &meSCS.geometricShapeDerivs_[dim * pOrder * (pOrder+1) * 4];
-
-  const auto& selector = stk::mesh::selectUnion(superPartVector_);
-  const auto& buckets = bulkData_->get_buckets(stk::topology::ELEMENT_RANK, selector);
-
-  // main loop
-  countAssemblies_ = 0;
   for (const auto* ib : buckets) {
     const auto& b = *ib;
     const auto length = b.size();
     for (size_t k = 0; k < length; ++k) {
-      double timeMain = -MPI_Wtime();
+      double timeMainStart = MPI_Wtime();
 
       // zero arrays
-      for (int p = 0; p < lhsSize; ++p) { lhs[p] = 0.0; }
-      for (int p = 0; p < nodesPerElement; ++p) { rhs[p] = 0.0; }
+      Kokkos::deep_copy(lhs, 0.0);
+      Kokkos::deep_copy(rhs, 0.0);
 
        // gather data
-      double timeGather = -MPI_Wtime();
+      double timeGatherStart = MPI_Wtime();
       stk::mesh::Entity const * node_rels = b.begin_nodes(k);
-      int vector_index = 0;
-      for (int i = 0; i < nodesPerElement; ++i) {
-        const double * coords = stk::mesh::field_data(*coordinates_, node_rels[i]);
-        scalar_field_data[elem_->tensor_index(i)] = *stk::mesh::field_data(*q_, node_rels[i]);
-        for (unsigned j=0; j < dim; ++j) {
-          coordinates[vector_index] = coords[j];
-          ++vector_index;
+      for (unsigned j = 0; j < nodes1D; ++j) {
+        for (unsigned i = 0; i < nodes1D; ++i) {
+          stk::mesh::Entity node = node_rels[nodeMap[i + nodes1D * j]];
+          scalar(j, i) = *stk::mesh::field_data(*q_, node);
+          nodalSource(j, i) = *stk::mesh::field_data(*source_, node);
+          const double * coords = stk::mesh::field_data(*coordinates_, node);
+          for (unsigned k = 0; k < dim; ++k) {
+            coordinates(k, j, i) = coords[k];
+          }
         }
       }
-      timeGather += MPI_Wtime();
-      timeGather_ += timeGather;
+      timeGather_ += MPI_Wtime() - timeGatherStart;
 
       // compute the metric for this element
-      double timeMetric = -MPI_Wtime();
-      laplaceOps.diffusion_metric(geomR, geomS, coordinates.data(), metric_laplace);
-      timeMetric += MPI_Wtime();
-      timeMetric_ += timeMetric;
-
-      // compute left-hand side
-      double timeLHS = -MPI_Wtime();
-      laplaceOps.elemental_laplacian(metric_laplace, lhs.data());
-      timeLHS += MPI_Wtime();
-      timeLHS_ += timeLHS;
+      double timeMetricStart = MPI_Wtime();
+      geomOps.diffusion_metric_linear(coordinates, metric_laplace);
+      timeMetric_ += MPI_Wtime() - timeMetricStart;
 
       // compute source term metric (det J)
-      double timeVolumeMetric = -MPI_Wtime();
-      double scv_error = 0.0;
-      meSCV_->determinant(1, coordinates.data(), metric_vol.data(), &scv_error);
-      timeVolumeMetric += MPI_Wtime();
-      timeVolumeMetric_ += timeVolumeMetric;
+      double timeVolumeMetricStart = MPI_Wtime();
+      geomOps.volume_metric_linear(coordinates, metric_vol);
+      timeVolumeMetric_ += MPI_Wtime() - timeVolumeMetricStart;
 
-      // compute volumetric source
-      double timeVolumeSource = -MPI_Wtime();
-      for (int i = 0; i < nodesPerElement; ++i) {
-        nodalSource[i] = -func.exact_laplacian(&coordinates[nodeMap[i] * dim]) * metric_vol[i];
-      }
-      laplaceOps.volumetric_source(nodalSource.data(), rhs.data());
-      timeVolumeSource += MPI_Wtime();
-      timeVolumeSource_ += timeVolumeSource;
+      // compute left-hand side
+      double timeLHSStart = MPI_Wtime();
+      laplaceOps.elemental_laplacian_matrix(metric_laplace, lhs);
+      timeLHS_ += MPI_Wtime() - timeLHSStart;
 
-      // compute residual
-      double timeRHS = -MPI_Wtime();
-      laplaceOps.elemental_residual(metric_laplace, scalar_field_data.data(), rhs.data());
-      timeRHS += MPI_Wtime();
-      timeResidual_ += timeRHS;
+      // compute volumetric source and add to rhs
+      double timeVolumeSourceStart = MPI_Wtime();
+      laplaceOps.volumetric_source(metric_vol, nodalSource, rhs);
+      timeVolumeSource_ += MPI_Wtime() - timeVolumeSourceStart;
+
+      // compute action of left-hand side and subtract from rhs to form residual
+      double timeRHSStart = MPI_Wtime();
+      laplaceOps.elemental_laplacian_action(metric_laplace, scalar, rhs);
+      timeResidual_ += MPI_Wtime() - timeRHSStart;
 
       // sum into the global matrix -- not timed since this is just to test correctness
       // and the actual "sumInto" will be very different
+      size_t indices[nodesPerElement];
       for (int j = 0; j < nodesPerElement; ++j) {
-        indices[j] = rowMap_.at(node_rels[j]);
+        indices[j] = rowMap_.at(node_rels[nodeMap[j]]);
       }
-      sum_into_global(indices.data(), lhs.data(), rhs.data(), nodesPerElement);
+      sum_into_global(indices, lhs.data(), rhs.data(), nodesPerElement);
 
-      timeMain += MPI_Wtime();
-      timeMainLoop_ += timeMain;
+      timeMainLoop_ += MPI_Wtime() - timeMainStart;
       ++countAssemblies_;
     }
   }
-  timeMainLoop_ /= static_cast<double>(countAssemblies_);
-  timeMetric_ /= static_cast<double>(countAssemblies_);
-  timeLHS_ /= static_cast<double>(countAssemblies_);
-  timeResidual_ /= static_cast<double>(countAssemblies_);
-  timeGather_ /= static_cast<double>(countAssemblies_);
-  timeVolumeMetric_ /= static_cast<double>(countAssemblies_);
-  timeVolumeSource_ /= static_cast<double>(countAssemblies_);
 }
 //--------------------------------------------------------------------------
 void
@@ -325,7 +298,6 @@ TensorProductPoissonTest::update_field()
 bool
 TensorProductPoissonTest::check_solution()
 {
-
   double maxError = -1.0;
   const auto& node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK,
     stk::mesh::selectUnion(superPartVector_));
@@ -335,23 +307,30 @@ TensorProductPoissonTest::check_solution()
     double* q = stk::mesh::field_data(*q_, b);
     double* qExact = stk::mesh::field_data(*qExact_, b);
     for (size_t k = 0; k < length; ++k) {
-      if (std::isnan(q[k])) {
+      if (!std::isfinite(q[k])) {
         NaluEnv::self().naluOutputP0()
-            << "Poisson test experienced a nan at GID, " << bulkData_->identifier(b[k]) << " ";
+            << "Poisson test experienced a non-finite number at GID, " << bulkData_->identifier(b[k]) << " ";
         return false;
       }
       maxError = std::max(maxError, std::abs(q[k] - qExact[k]));
     }
   }
 
-  // error should be small for high order
+  // error should be small for high-enough order
   if (maxError >= testTolerance_) {
     NaluEnv::self().naluOutputP0()
         << "Poisson test failed with a maximum error of "
         << maxError << " vs a tolerance of "
         << testTolerance_ << ", ";
   }
-  return (maxError < testTolerance_);
+
+  // test failed to iterate over any nodes at all ...
+  // something went wrong with mesh creation
+  if (maxError < 0 ) {
+    NaluEnv::self().naluOutputP0()
+        << "Poisson test failed to iterate over any nodes ";
+  }
+  return (maxError < testTolerance_ && maxError > 0);
 }
 //--------------------------------------------------------------------------
 void
@@ -372,8 +351,6 @@ TensorProductPoissonTest::setup_mesh()
   ThrowRequireMsg(metaData_->spatial_dimension() == 2, "Only 2D for now");
   elem_ = ElementDescription::create(metaData_->spatial_dimension(), order_, "SGL", true);
   ThrowRequire(elem_.get() != nullptr);
-  meSCV_ = make_master_volume_element(*elem_);
-  meSCS_ = make_master_subcontrol_surface_element(*elem_);
 
   setup_super_parts();
   register_fields();
@@ -381,8 +358,9 @@ TensorProductPoissonTest::setup_mesh()
   // populate bulk data
   ioBroker_->populate_bulk_data();
 
+  // perturb coordinates before promotion, so promoted mesh is not-curved
   if (randomlyPerturbCoordinates_) {
-    perturb_coordinates(0.25, 0.15);
+    perturb_coordinates(0.125, 0.1);
   }
 
   bulkData_->modification_begin();
@@ -399,7 +377,10 @@ TensorProductPoissonTest::initialize_matrix()
 {
   // count interior nodes
   const auto& node_buckets =
-      bulkData_->get_buckets(stk::topology::NODE_RANK, stk::mesh::selectUnion(superPartVector_));
+      bulkData_->get_buckets(
+        stk::topology::NODE_RANK,
+        stk::mesh::selectUnion(superPartVector_)
+  );
 
   // set-up connectivity
   size_t nodeNumber = 0;
@@ -425,7 +406,7 @@ TensorProductPoissonTest::apply_dirichlet()
 {
   int dim = metaData_->spatial_dimension();
   int numNodes = rowMap_.size();
-  auto func = MMSFunction(dim);
+  auto func = MMSFunction();
 
   const auto& face_node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK,
     stk::mesh::selectUnion(superSidePartVector_));
@@ -440,7 +421,7 @@ TensorProductPoissonTest::apply_dirichlet()
         lhs_(index, i) = 0.0;
       }
       lhs_(index, index) = 1.0;
-      rhs_(index) = func.value(&coords[k * dim]) - q[k];
+      rhs_(index) = func.exact_solution(coords[k*dim + 0 ], coords[k*dim+1]) - q[k];
     }
   }
 }
@@ -465,7 +446,7 @@ TensorProductPoissonTest::sum_into_global(
   for (int j = 0; j < length; ++j) {
     rhs_(indices[j]) += rhs_local[j];
     for (int i = 0; i < length; ++i) {
-      lhs_(indices[j], indices[i]) += lhs_local[i+j*length];
+      lhs_(indices[j], indices[i]) += lhs_local[i + length * j];
     }
   }
 }
@@ -492,51 +473,19 @@ TensorProductPoissonTest::output_banner()
   NaluEnv::self().naluOutputP0() << "-------------------------"  << std::endl;
 }
 //--------------------------------------------------------------------------
-std::unique_ptr<MasterElement>
-TensorProductPoissonTest::make_master_volume_element(const ElementDescription& elem)
-{
-  if (elem.dimension == 2) {
-    return make_unique<HigherOrderQuad2DSCV>(elem);
-  }
-  return make_unique<HigherOrderHexSCV>(elem);
-}
-//--------------------------------------------------------------------------
-std::unique_ptr<MasterElement>
-TensorProductPoissonTest::make_master_subcontrol_surface_element(const ElementDescription& elem)
-{
-  if (elem.dimension == 2) {
-    return make_unique<HigherOrderQuad2DSCS>(elem);
-  }
-  return make_unique<HigherOrderHexSCS>(elem);
-}
-//--------------------------------------------------------------------------
 void
 TensorProductPoissonTest::register_fields()
 {
-  for (auto* basePart : originalPartVector_) {
-    coordinates_ = &(metaData_->declare_field<VectorFieldType>(
-      stk::topology::NODE_RANK, "coordinates"));
-    stk::mesh::put_field(*coordinates_, *basePart, metaData_->spatial_dimension());
+  coordinates_ =  &(metaData_-> declare_field<VectorFieldType>(stk::topology::NODE_RANK, "coordinates"));
+  q_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
+  source_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "source"));
+  qExact_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "exact_scalar"));
 
-    q_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
-    stk::mesh::put_field(*q_, *basePart);
-
-    qExact_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "exact_scalar"));
-    stk::mesh::put_field(*qExact_, *basePart);
-  }
-
-  // save space for parts of the input mesh
-  for (auto* superPart : superPartVector_) {
-    coordinates_ = &(metaData_->declare_field<VectorFieldType>(
-      stk::topology::NODE_RANK, "coordinates"));
-    stk::mesh::put_field(*coordinates_, *superPart, metaData_->spatial_dimension());
-
-    q_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "scalar"));
-    stk::mesh::put_field(*q_, *superPart);
-
-    qExact_ = &(metaData_-> declare_field<ScalarFieldType>(stk::topology::NODE_RANK, "exact_scalar"));
-    stk::mesh::put_field(*qExact_, *superPart);
-  }
+  const auto& allSuperParts = stk::mesh::selectUnion(superPartVector_);
+  stk::mesh::put_field(*coordinates_, allSuperParts, metaData_->spatial_dimension());
+  stk::mesh::put_field(*q_, allSuperParts);
+  stk::mesh::put_field(*source_, allSuperParts);
+  stk::mesh::put_field(*qExact_, allSuperParts);
 }
 //--------------------------------------------------------------------------
 void
@@ -549,7 +498,6 @@ TensorProductPoissonTest::setup_super_parts()
         super_element_part_name(targetPart->name()),
         stk::create_superelement_topology(static_cast<unsigned>(elem_->nodesPerElement))
       );
-
       stk::io::put_io_part_attribute(*superElemPart);
       superPartVector_.push_back(superElemPart);
     }
@@ -557,19 +505,14 @@ TensorProductPoissonTest::setup_super_parts()
       auto* superSuperset = &metaData_->declare_part(super_element_part_name(targetPart->name()));
       for (const auto* subset : targetPart->subsets()) {
         if (subset->topology().rank() == metaData_->side_rank()) {
-          stk::mesh::Part* superFacePart;
-          if (metaData_->spatial_dimension() == 2) {
-            superFacePart = &metaData_->declare_part_with_topology(
-              super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+          auto topo = metaData_->spatial_dimension() == 2 ?
               stk::create_superedge_topology(static_cast<unsigned>(elem_->nodesPerFace))
-            );
-          }
-          else {
-            superFacePart = &metaData_->declare_part_with_topology(
-              super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
-              stk::create_superface_topology(static_cast<unsigned>(elem_->nodesPerFace))
-            );
-          }
+            : stk::create_superface_topology(static_cast<unsigned>(elem_->nodesPerFace));
+
+          stk::mesh::Part* superFacePart = &metaData_->declare_part_with_topology(
+            super_subset_part_name(subset->name(), elem_->nodesPerElement, elem_->nodesPerFace),
+            topo
+          );
           superSidePartVector_.push_back(superFacePart);
           superPartVector_.push_back(superFacePart);
           metaData_->declare_part_subset(*superSuperset, *superFacePart);
@@ -596,7 +539,7 @@ void
 TensorProductPoissonTest::perturb_coordinates(double elem_size, double fac)
 {
   std::mt19937 rng;
-  rng.seed(0);
+  rng.seed(std::random_device()());
   std::uniform_real_distribution<double> coeff(-fac*elem_size, fac*elem_size);
 
   auto selector = stk::mesh::selectUnion(originalPartVector_);
@@ -604,10 +547,8 @@ TensorProductPoissonTest::perturb_coordinates(double elem_size, double fac)
   int dim = metaData_->spatial_dimension();
 
   for (const auto ib : node_buckets ) {
-    const auto& b = *ib ;
-    const auto length  = b.size();
-    double* coords = stk::mesh::field_data(*coordinates_, b);
-    for ( size_t k = 0 ; k < length ; ++k ) {
+    double* coords = stk::mesh::field_data(*coordinates_, *ib);
+    for ( size_t k = 0 ; k < ib->size() ; ++k ) {
       for (int j = 0; j < dim; ++j) {
         coords[k * dim + j] += coeff(rng);
       }
@@ -619,21 +560,24 @@ void
 TensorProductPoissonTest::initialize_fields()
 {
   std::mt19937 rng;
-  rng.seed(0);
+  rng.seed(std::random_device()());
   std::uniform_real_distribution<double> coeff(-1,1);
 
   int dim = metaData_->spatial_dimension();
-  auto func = MMSFunction(dim);
-  const auto& node_buckets = bulkData_->get_buckets(stk::topology::NODE_RANK, stk::mesh::selectUnion(superPartVector_));
+  auto func = MMSFunction();
+  const auto& node_buckets =
+      bulkData_->get_buckets(stk::topology::NODE_RANK, stk::mesh::selectUnion(superPartVector_));
   for (const auto ib : node_buckets ) {
     const auto& b = *ib ;
     const auto length  = b.size();
     double* q = stk::mesh::field_data(*q_, b);
     double* qExact = stk::mesh::field_data(*qExact_, b);
+    double* source = stk::mesh::field_data(*source_, b);
     double* coords = stk::mesh::field_data(*coordinates_, b);
     for ( size_t k = 0 ; k < length ; ++k ) {
       q[k] = coeff(rng);
-      qExact[k] = func.value(&coords[k*dim]);
+      qExact[k] = func.exact_solution(coords[k*dim+0], coords[k*dim+1]);
+      source[k] = -func.exact_laplacian(coords[k*dim+0], coords[k*dim+1]);
     }
   }
 }
